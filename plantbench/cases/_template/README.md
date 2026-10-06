@@ -1,6 +1,6 @@
 # `template`: gravity-drained tank
 
-The case card: what the case is, where its numbers come from, and how far it can be trusted. Each section below is required of a case added to the library (`python -m plantbench check <case> --contribute` checks that the headings are there). Replace the tank with your plant.
+The case card: what the case is, where its numbers come from, and how far it can be trusted. Each section below is required of a case added to the library (`plantbench check <case> --contribute` checks that the headings are there). Replace the tank with your plant. A case presented in a publication of its own adds a `## Citation` section after Limitations: the reference as its first paragraph, then a `bibtex` block. `plantbench describe` prints it and dataset cards list it.
 
 ## Provenance
 

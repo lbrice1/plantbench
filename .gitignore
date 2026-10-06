@@ -29,3 +29,6 @@ docs/apidocs/
 # Tool caches
 .pytest_cache/
 .ruff_cache/
+
+# pixi environments
+.pixi/

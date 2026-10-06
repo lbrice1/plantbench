@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 import plantbench as pb
-from plantbench import cases, contract, datagen
+from plantbench import cases, contract, datagen, report
 from plantbench.__main__ import main
 from plantbench.core.casekit import StateLayout, fixed_point_residual, state_measurement
 from plantbench.scaffold import new_case
@@ -259,6 +259,81 @@ def test_check_reports_on_the_command_line(capsys):
     out = capsys.readouterr().out
     assert f"{len(contract.CHECKS) + len(contract.RULES)} passed, 0 failed" in out
     assert "open-loop |rhs| at the design point" in out
+
+
+# ------------------------------------------------------------------------------------
+# Citations
+# ------------------------------------------------------------------------------------
+
+CITATION = """\
+# `ext_tank`: gravity-drained tank
+
+## Limitations
+
+None.
+
+## Citation
+
+Doe, J. (2026). A tank. *Journal of Tanks*, 1, 1.
+
+```bibtex
+@article{doe2026tank,
+  author = {Doe, J.},
+}
+```
+"""
+
+
+def test_a_case_card_gives_the_publication_of_the_case(tank_module, monkeypatch, tmp_path,
+                                                        capsys):
+    monkeypatch.setattr(cases, "entry_points", _entry_points(("ext_tank", "ext_tank:CASE")))
+    (tmp_path / "README.md").write_text(CITATION)
+    cite = cases.citation(pb.load_case("ext_tank"))
+    assert cite["reference"] == "Doe, J. (2026). A tank. *Journal of Tanks*, 1, 1."
+    assert cite["text"].endswith("}\n```") and "## " not in cite["text"]
+    assert main(["describe", "ext_tank"]) == 0
+    assert "@article{doe2026tank," in capsys.readouterr().out
+    datagen.run_configurations("ext_tank", [{"structure": "level PI"}], tmp_path / "d",
+                               {"t_end": 10.0, "dt": 5.0}, log=lambda m: None)
+    c = report.card(tmp_path / "d")
+    assert c["case_citation"] == cite
+    assert ("Case citation", cite["reference"]) in report.rows(c)
+
+
+def test_only_a_case_card_gives_a_citation(tank_module, tmp_path, capsys):
+    assert cases.citation(pb.load_case("jacketed_cstr")) is None
+    main(["describe", "jacketed_cstr"])
+    assert "publication of its own" not in capsys.readouterr().out
+    # A README beside a script is not a case card, so a session case reads none.
+    (tmp_path / "README.md").write_text(CITATION)
+    assert cases.citation(pb.load_case("ext_tank_decorated")) is None
+
+
+def test_a_case_that_cannot_be_loaded_is_a_warning_on_the_card(tank_module, monkeypatch,
+                                                               tmp_path):
+    monkeypatch.setattr(cases, "entry_points", _entry_points(("ext_tank", "ext_tank:CASE")))
+    datagen.run_configurations("ext_tank", [{"structure": "level PI"}], tmp_path / "d",
+                               {"t_end": 10.0, "dt": 5.0}, log=lambda m: None)
+    # The package now gives a case of another id, which `load_case` refuses.
+    monkeypatch.setattr(cases, "entry_points", _entry_points(("ext_tank", "ext_tank:OTHER")))
+    monkeypatch.setattr(tank_module, "OTHER", pb.load_case("jacketed_cstr"), raising=False)
+    c = report.card(tmp_path / "d")
+    assert c["case_citation"] is None and c["runs"]["ok"] == 1
+    (warning,) = [w for w in c["warnings"] if "could not be loaded" in w]
+    assert warning.startswith("the case ext_tank could not be loaded (ValueError: ")
+    assert f"warning: {warning}" in report.render(c)
+
+
+def test_an_empty_citation_section_breaks_the_card_rule(tmp_path, monkeypatch):
+    root = new_case("cited_tank", tmp_path / "cited_tank")
+    case = _import_scaffold(root, "cited_tank", monkeypatch)
+    card = root / "cited_tank" / "README.md"
+    card.write_text(card.read_text() + "\n## Citation\n")
+    with pytest.raises(contract.ContractError, match="Citation section with nothing"):
+        contract.has_a_case_card(case)
+    card.write_text(card.read_text() + "\nDoe, J. (2026). A tank.\n")
+    contract.has_a_case_card(case)
+    assert cases.citation(case)["reference"] == "Doe, J. (2026). A tank."
 
 
 # ------------------------------------------------------------------------------------

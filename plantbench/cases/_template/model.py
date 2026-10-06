@@ -1,6 +1,6 @@
 """Template case, the model: a gravity-drained tank.
 
-`python -m plantbench new-case <id>` copies it to start a case.  Everything a case needs is here in its smallest
+`plantbench new-case <id>` copies it to start a case.  Everything a case needs is here in its smallest
 form: frozen parameters, an inputs dataclass, a design at steady state with an `rhs`
 method, and nothing else.  Replace the tank with your plant.
 
