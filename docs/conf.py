@@ -22,7 +22,7 @@ extensions = [
 ]
 
 # autodoc2 writes its own index; the API page in the toctree is api.md.
-exclude_patterns = ["_build", "apidocs/index.rst"]
+exclude_patterns = ["_build", "apidocs/index.rst", "_installation.md"]
 
 # The guides and the case cards are Markdown, read by GitHub as well as here.
 myst_enable_extensions = ["colon_fence", "dollarmath"]
