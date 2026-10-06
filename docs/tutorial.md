@@ -16,7 +16,7 @@ cd plantbench-tutorial
 
 ```console
 $ plantbench --version
-plantbench 0.2.0
+plantbench 0.2.1
 $ plantbench list
 jacketed_cstr              Non-isothermal CSTR with a cooling jacket  [built in]
 reactor_separator_recycle  Reactor-separator-recycle plant with heat integration  [built in]
@@ -30,7 +30,7 @@ reactor_separator_recycle  Reactor-separator-recycle plant with heat integration
 $ plantbench describe jacketed_cstr
 jacketed_cstr: Non-isothermal CSTR with a cooling jacket
 
-The reference reactor on its own: first-order exothermic A -> B, three states, three steady states, and a design point on the open-loop unstable middle branch. Structures from open loop to the composition cascade. Its steady state and eigenvalues reproduce the published values once three corrections to the published parameter table are applied.
+The reference reactor on its own: first-order exothermic A -> B, three states, three steady states, and a design point on the open-loop unstable middle branch. Structures from open loop to the composition cascade. Its steady state and eigenvalues reproduce the published values once three modifications to the published parameter table are applied.
 
 states          3
 inputs          F0, CA0, T0, Fj
@@ -295,7 +295,7 @@ $ plantbench card data/tutorial --format md
 |---|---|
 | Study | `tutorial` |
 | Case | `jacketed_cstr` |
-| Code | `plantbench` 0.2.0 (checkout <commit>, clean) |
+| Code | `plantbench` 0.2.1 (checkout <commit>, clean) |
 | Specification | `data/tutorial/spec.toml`; `pb-spec:7d155fc4b98b` |
 | Runs | 16 completed; 0.0 min of integration |
 | Environment | Python 3.14.7, NumPy 2.5.3, SciPy 1.18.1 |
