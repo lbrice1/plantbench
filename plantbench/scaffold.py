@@ -1,6 +1,6 @@
 """A new case in a package of its own, started from the template.
 
-    python -m plantbench new-case my_tank [DIR]
+    plantbench new-case my_tank [DIR]
 
 writes an installable package under DIR (default `./my_tank`):
 
@@ -40,7 +40,7 @@ dependencies = ["plantbench>={version}"]
 
 [project.optional-dependencies]
 # Dependencies of the model beyond NumPy and SciPy go in an extra named for what they
-# provide; `python -m plantbench check {id} --contribute` refuses an import no extra declares.
+# provide; `plantbench check {id} --contribute` refuses an import no extra declares.
 test = ["pytest>=8.0"]
 
 # This line is what makes the case visible to plantbench once the package is installed.
@@ -77,7 +77,7 @@ def test_contract(check):
 
 _DEFINITION_DOC = '''"""`{id}`, the definition: what plantbench needs to know about the model.
 
-Started from the plantbench template by `python -m plantbench new-case {id}`.  The
+Started from the plantbench template by `plantbench new-case {id}`.  The
 package's pyproject.toml declares `CASE` as an entry point, so that plantbench finds it
 by its id once the package is installed.
 """'''

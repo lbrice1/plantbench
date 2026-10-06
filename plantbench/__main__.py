@@ -1,15 +1,17 @@
 """Command line: list and describe cases, run one configuration, generate a dataset.
 
-    python -m plantbench list
-    python -m plantbench describe reactor_separator_recycle
-    python -m plantbench run jacketed_cstr [--config config.toml] [--t-end 600] [--dt 1] [--out run.npz]
-    python -m plantbench generate spec.toml [--out DIR] [--workers N]
-    python -m plantbench datasets [DIR]
-    python -m plantbench compare A B [--tol T] [--no-trajectories]
-    python -m plantbench card data/regimes [--format text|md|latex|json]
-    python -m plantbench verify spec.toml pb-protocol:dab0d47475e9
-    python -m plantbench new-case my_tank [DIR]
-    python -m plantbench check my_tank [--contribute]
+    plantbench list
+    plantbench describe reactor_separator_recycle
+    plantbench run jacketed_cstr [--config config.toml] [--t-end 600] [--dt 1] [--out run.npz]
+    plantbench generate spec.toml [--out DIR] [--workers N]
+    plantbench datasets [DIR]
+    plantbench compare A B [--tol T] [--no-trajectories]
+    plantbench card data/regimes [--format text|md|latex|json]
+    plantbench verify spec.toml pb-protocol:dab0d47475e9
+    plantbench new-case my_tank [DIR]
+    plantbench check my_tank [--contribute]
+
+`python -m plantbench` is equivalent to `plantbench`.
 """
 
 from __future__ import annotations
@@ -52,6 +54,10 @@ def _describe(args) -> None:
     print(f"\nreference plant: {case.default_structure}; loops {', '.join(loops)}")
     print(f"closed-loop rightmost eigenvalue {ev.real.max():+.4f} 1/min, "
           f"least damping ratio {ctl.damping_ratio(ev):.3f}")
+    cite = pb.cases.citation(case)
+    if cite is not None:
+        print(f"\nthis case was presented in a publication of its own; cite it beside "
+              f"plantbench:\n\n{cite['text']}")
 
 
 def _run(args) -> None:
@@ -146,9 +152,9 @@ def _new_case(args) -> None:
     from plantbench.scaffold import new_case
     root = new_case(args.case, args.dir)
     print(f"case {args.case} written to {root}\n\n"
-          f"  pip install -e {root}          # plantbench then finds {args.case} by its id\n"
+          f"  pip install -e {root}          # or uv pip install -e; plantbench then finds {args.case}\n"
           f"  pytest {root}                  # the contract, on the template's tank\n"
-          f"  python -m plantbench check {args.case}\n\n"
+          f"  plantbench check {args.case}\n\n"
           f"then replace the tank in {root / args.case}/model.py with your plant.")
 
 
@@ -180,7 +186,11 @@ def _check(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="python -m plantbench", description=__doc__.splitlines()[0])
+    doc = __doc__.splitlines()
+    parser = argparse.ArgumentParser(prog="plantbench", description=doc[0],
+                                     epilog="examples:\n" + "\n".join(doc[1:]).strip("\n"),
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--version", action="version", version=f"plantbench {pb.__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("list", help="the cases available").set_defaults(func=_list)
     p = sub.add_parser("describe", help="what a case provides")

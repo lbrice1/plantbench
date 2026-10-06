@@ -24,6 +24,7 @@ import re
 import sys
 from dataclasses import dataclass
 from importlib.metadata import EntryPoint, entry_points
+from pathlib import Path
 from typing import Callable
 
 from plantbench.core.case import Case
@@ -120,6 +121,53 @@ def source(case_id: str) -> dict:
     if case_id in _SESSION:
         return {"kind": "session", "module": _SESSION[case_id].module}
     raise KeyError(f"no case {case_id!r}; cases: {list_cases()}")
+
+
+def package_dir(case: Case) -> Path:
+    """The directory of the package that defines a case: that of its `make_design`."""
+    module = sys.modules.get(case.make_design.__module__) \
+        or importlib.import_module(case.make_design.__module__)
+    return Path(module.__file__).resolve().parent
+
+
+def card_section(card: str, name: str) -> str | None:
+    """The text under the `## <name>` heading of a case card, or None without one.
+
+    The heading is matched without regard to case; the section runs to the next heading
+    of the same or a higher level outside a code block."""
+    lines, out, fence = card.splitlines(), None, False
+    for line in lines:
+        if line.startswith("```"):
+            fence = not fence
+        if not fence and line.startswith(("# ", "## ")):
+            if out is not None:
+                break
+            if line[3:].strip().lower() == name.lower() and line.startswith("## "):
+                out = []
+            continue
+        if out is not None:
+            out.append(line)
+    return None if out is None else "\n".join(out).strip()
+
+
+def citation(case: Case) -> dict | None:
+    """The publication a case was presented in, from the Citation section of its card.
+
+    `reference` is the first paragraph of the section, the reference as it is written to
+    be read, and `text` the whole section, BibTeX included.  None when the card has no
+    Citation section, or the case has no card; and for a session case, whose module may
+    sit beside a README that is not a case card.  A case not registered at all, such as
+    one imported to be checked, is read like an installed one."""
+    try:
+        if source(case.id)["kind"] == "session":
+            return None
+    except KeyError:
+        pass
+    card = package_dir(case) / "README.md"
+    text = card_section(card.read_text(), "citation") if card.exists() else None
+    if not text:
+        return None
+    return {"reference": " ".join(text.split("\n\n")[0].split()), "text": text}
 
 
 def session_modules() -> list[str]:

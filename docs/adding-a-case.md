@@ -7,7 +7,7 @@ This page is the reference for a case in the library: its name, what it must pro
 `plantbench/cases/_template/` is a working case, a gravity-drained tank with a level loop, kept working by the contract tests. Start from it in a package of your own,
 
 ```
-python -m plantbench new-case <name>
+plantbench new-case <name>
 ```
 
 or, working in a clone of the library, copy it into a directory that does not exist yet (`cp -r` into an existing directory copies the template inside it instead):
@@ -44,7 +44,7 @@ A case is named for the process it models. The name is its id in `load_case`, th
    Adding an option to a case that already has datasets changes the hash of every configuration ever made from it, because a configuration is validated with the case's defaults filled in before it is hashed, and with it the identity of every run already generated. A quantity that has to be added to a settled case is therefore better carried as a parameter, which a configuration never acquires by default.
 8. **Registration.** Add the case's `definition` module to `_MODULES` in `plantbench/cases/__init__.py`. A case kept outside the library is declared as an entry point of its package, or made available for a session with `@plantbench.case` or `plantbench.register(CASE)` ([Developing a case](developing-a-case.md#making-a-case-available)).
 9. **Tests.** The contract (`plantbench.contract.CHECKS`, run by `tests/cases/test_contract.py`) runs on every registered case: fixed point under every structure, state names, configuration round trip, finite measurements, ideal instruments adding nothing, a short run at rest. Add the case's own tests in `tests/cases/<case>/`: conservation, analytic limits, and the published values it reproduces.
-10. **Case card.** `README.md` in the case's directory, with the sections of the existing cards: provenance, process, states, inputs, options, structures, disturbances, measurements, reference results, verification and limitations.
+10. **Case card.** `README.md` in the case's directory, with the sections of the existing cards: provenance, process, states, inputs, options, structures, disturbances, measurements, reference results, verification and limitations. A case presented in a publication of its own adds a Citation section: the reference as its first paragraph, then its BibTeX. `plantbench describe` prints the section, dataset cards list the reference, and the library's citation text asks users to cite the publication as well.
 
 ## Rules
 
@@ -58,7 +58,7 @@ A case is named for the process it models. The name is its id in `load_case`, th
 A case developed with `new-case` has the layout of a case in the library inside its package directory, so adding it is a move of that directory. First,
 
 ```
-python -m plantbench check <case> --contribute
+plantbench check <case> --contribute
 ```
 
 must pass. It runs the contract and the rules above that can be checked mechanically: imports from `core`, `units` and `heat` only, no other case, and no third-party import that an extra does not declare; a case card with every section; tests of the case's own. It then lists the rules that need a reviewer's judgment, which the pull request should answer. Then, in a fork of the library ([CONTRIBUTING.md](https://github.com/lbrice1/plantbench/blob/main/CONTRIBUTING.md)):
@@ -70,13 +70,45 @@ must pass. It runs the contract and the rules above that can be checked mechanic
 5. Move any extra of the package into the library's `pyproject.toml`, named for what it provides.
 6. Uninstall the package, so that its entry point no longer declares the id the library now holds.
 7. Add the case to the case tables of `README.md` and `docs/cases/index.md`, with a page under `docs/cases/`.
-8. Run `python -m plantbench check <case> --contribute` again, and the verification below.
+8. If the case was presented in a publication of its own, give it in a Citation section of the case card (checklist item 10).
+9. Run `plantbench check <case> --contribute` again, and the verification below.
 
 ## Verification
 
+::::{tab-set}
+:sync-group: installer
+
+:::{tab-item} uv
+:sync: uv
+
 ```
-.venv/bin/python -m pytest -q             # includes the contract suite for the new case
-.venv/bin/python -m pytest -q -m slow     # the slow golden test of `reactor_separator_recycle`
-python -m plantbench check <new case> --contribute
-python -m plantbench describe <new case>
+uv run pytest -q                                 # includes the contract suite for the new case
+uv run pytest -q -m slow                         # the slow golden test of `reactor_separator_recycle`
+uv run plantbench check <new case> --contribute
+uv run plantbench describe <new case>
 ```
+:::
+
+:::{tab-item} pixi
+:sync: pixi
+
+```
+pixi run test                                    # includes the contract suite for the new case
+pixi run test-slow                               # the slow golden test of `reactor_separator_recycle`
+pixi run plantbench check <new case> --contribute
+pixi run plantbench describe <new case>
+```
+:::
+
+:::{tab-item} pip
+:sync: pip
+
+```
+.venv/bin/python -m pytest -q                    # includes the contract suite for the new case
+.venv/bin/python -m pytest -q -m slow            # the slow golden test of `reactor_separator_recycle`
+.venv/bin/plantbench check <new case> --contribute
+.venv/bin/plantbench describe <new case>
+```
+:::
+
+::::

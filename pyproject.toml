@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "plantbench"
-version = "0.1.0"
+version = "0.2.0"
 description = "Plantwide process simulations as test problems for process systems engineering"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -27,11 +27,45 @@ dev = ["pytest>=8.0", "matplotlib>=3.9", "pre-commit>=3.5", "ruff>=0.6"]
 # hdbscan 0.8.41 is the first to run against scikit-learn 1.8 and later.
 study = ["matplotlib>=3.9", "scikit-learn>=1.3", "pacmap>=0.7.6", "hdbscan>=0.8.41"]
 # The documentation site: docs/conf.py, built by Read the Docs from .readthedocs.yaml.
-docs = ["sphinx>=8", "myst-parser>=4", "furo", "sphinx-autodoc2>=0.5"]
+docs = ["sphinx>=8", "myst-parser>=4", "sphinx-rtd-theme>=3", "sphinx-design>=0.6",
+        "sphinx-autodoc2>=0.5"]
+
+[project.scripts]
+plantbench = "plantbench.__main__:main"
 
 [project.urls]
 Documentation = "https://plantbench.readthedocs.io"
 Repository = "https://github.com/lbrice1/plantbench"
+
+# pixi reads the extras above as features of the same names.  NumPy and SciPy come from
+# conda-forge; plantbench itself is installed editable from this directory.
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+# The wheels of faiss-cpu, which PaCMAP needs, are built for macOS 14 and later on arm64;
+# with pixi's default of macOS 13 the study environment would build it from source.
+platforms = [{ name = "osx-arm64-macos14", platform = "osx-arm64", macos = "14.0" }, "osx-64",
+             "linux-64", "win-64"]
+
+[tool.pixi.dependencies]
+python = ">=3.11"
+numpy = ">=2.0"
+scipy = ">=1.15"
+
+[tool.pixi.pypi-dependencies]
+plantbench = { path = ".", editable = true }
+
+[tool.pixi.environments]
+default = ["dev"]
+study = ["dev", "study"]
+docs = ["docs"]
+
+[tool.pixi.tasks]
+test = "pytest -q"
+test-slow = "pytest -q -m slow"
+lint = "ruff check ."
+
+[tool.pixi.feature.docs.tasks]
+docs = "sphinx-build -W --keep-going -b html docs docs/_build/html"
 
 [tool.setuptools.packages.find]
 include = ["plantbench*"]

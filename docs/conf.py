@@ -1,7 +1,8 @@
 """Sphinx configuration for the plantbench documentation.
 
-    .venv/bin/pip install -e ".[docs]"
-    .venv/bin/sphinx-build -W --keep-going -b html docs docs/_build/html
+    pixi run docs
+    uv run --extra docs sphinx-build -W --keep-going -b html docs docs/_build/html
+    .venv/bin/pip install -e ".[docs]" && .venv/bin/sphinx-build -W --keep-going -b html docs docs/_build/html
 """
 
 from importlib.metadata import version as _version
@@ -17,10 +18,11 @@ extensions = [
     "autodoc2",
     "sphinx.ext.intersphinx",
     "sphinx.ext.mathjax",
+    "sphinx_design",
 ]
 
 # autodoc2 writes its own index; the API page in the toctree is api.md.
-exclude_patterns = ["_build", "apidocs/index.rst"]
+exclude_patterns = ["_build", "apidocs/index.rst", "_installation.md"]
 
 # The guides and the case cards are Markdown, read by GitHub as well as here.
 myst_enable_extensions = ["colon_fence", "dollarmath"]
@@ -46,11 +48,23 @@ intersphinx_mapping = {
     "scipy": ("https://docs.scipy.org/doc/scipy", None),
 }
 
-html_theme = "furo"
+# The theme and options of the SHAP documentation; custom.css adds a dark scheme, which
+# sphinx_rtd_theme does not have, and follows the reader's system setting.
+html_theme = "sphinx_rtd_theme"
 html_title = f"plantbench {release}"
 html_static_path = ["_static"]
+html_css_files = ["css/custom.css"]
+html_logo = "_static/logo-dark.svg"
 html_favicon = "_static/logo-mark.svg"
 html_theme_options = {
-    "light_logo": "logo-mark.svg",
-    "dark_logo": "logo-mark-dark.svg",
+    "logo_only": True,
+    "prev_next_buttons_location": "bottom",
+    "style_external_links": False,
+    "style_nav_header_background": "#343131",
+    "collapse_navigation": True,
+    "sticky_navigation": True,
+    "navigation_depth": 4,
+    "includehidden": True,
+    "titles_only": False,
 }
+pygments_style = "sphinx"

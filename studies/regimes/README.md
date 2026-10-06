@@ -9,7 +9,7 @@ The demonstration study of the library: data mining and knowledge discovery on a
 
 ```
 .venv/bin/pip install -e ".[study]"
-.venv/bin/python -m plantbench generate studies/regimes/spec.toml --workers 10   # about 1.5 h on 10 cores
+.venv/bin/plantbench generate studies/regimes/spec.toml --workers 10   # about 1.5 h on 10 cores
 .venv/bin/python -m studies.regimes.analysis data/regimes
 .venv/bin/python -m studies.regimes.figures
 ```

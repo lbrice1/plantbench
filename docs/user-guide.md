@@ -2,12 +2,7 @@
 
 ## Installation
 
-```
-python3 -m venv .venv
-.venv/bin/pip install -e ".[dev]"
-```
-
-Python 3.11 or later. The library depends on NumPy, SciPy and Matplotlib. The `study` extra adds scikit-learn and PaCMAP for `studies/regimes`.
+Python 3.11 or later, with uv, pixi or pip ([Installation](index.md#installation)). The library depends on NumPy and SciPy. The `dev` extra adds pytest, Matplotlib, ruff and pre-commit, and the `study` extra adds Matplotlib, scikit-learn, PaCMAP and HDBSCAN for the studies.
 
 ## Cases
 
@@ -19,14 +14,14 @@ case = pb.load_case("jacketed_cstr")
 print(case.summary)
 ```
 
-From the command line, `python -m plantbench list` and `python -m plantbench describe reactor_separator_recycle`. The case cards in `plantbench/cases/<case>/README.md` document each case's states, inputs, options, structures, disturbances, measurements and reference results.
+From the command line, `plantbench list` and `plantbench describe reactor_separator_recycle`. The case cards in `plantbench/cases/<case>/README.md` document each case's states, inputs, options, structures, disturbances, measurements and reference results.
 
 | Case | States | Description |
 |---|---|---|
 | `reactor_separator_recycle` | 134 (base plant) | reactor–separator–recycle plant with heat integration; frozen |
 | `jacketed_cstr` | 3 | the reactor of `reactor_separator_recycle` on its own, open-loop unstable |
 
-A case outside the library is used the same way once plantbench finds it: from an installed package that declares it as an entry point, or from a function decorated with `@pb.case` in a script. `python -m plantbench list` shows where each case comes from. [Developing a case](developing-a-case.md) describes both, and `python -m plantbench new-case` starts one.
+A case outside the library is used the same way once plantbench finds it: from an installed package that declares it as an entry point, or from a function decorated with `@pb.case` in a script. `plantbench list` shows where each case comes from. [Developing a case](developing-a-case.md) describes both, and `plantbench new-case` starts one.
 
 ## Running a configuration
 
@@ -159,7 +154,7 @@ not provide is refused before any run is made, and a feature that raises is reco
 A dotted path names a configuration section and then its keys: `"tuning.reactor T.Kc"` is the gain of the loop named `reactor T`, and `"params.reactor.U"` is the parameter override `reactor.U`. A path may name a whole section, with whole sections as its values.
 
 ```
-python -m plantbench generate spec.toml --workers 8
+plantbench generate spec.toml --workers 8
 ```
 
 or `plantbench.datagen.generate("spec.toml", workers=8)`. A script that generates with more than one worker needs an `if __name__ == "__main__":` guard, because each worker process imports the script it was started from. The dataset is written to `data/<name>/` unless `--out` is given:
@@ -174,7 +169,7 @@ or `plantbench.datagen.generate("spec.toml", workers=8)`. A script that generate
 
 Generation resumes where it stopped. Runs already recorded are skipped, including those that failed, since a failure recurs. An interrupt, or the SIGTERM a scheduler sends to end a job, cancels the runs not yet started; those already running finish, and a resume runs whatever was not recorded. A directory holds one specification, and a changed specification needs a new directory. One generation writes to a directory at a time: a second one started on it is refused. The manifest keeps the specification's fingerprint, the canonical text of everything that decides which runs exist, so a dataset always says which protocol its runs are of.
 
-The commit is recorded only when the library runs from a checkout of its repository; an installed copy records none. The dirty flag looks at the code alone, `plantbench/` and `studies/` without their results and figures, so an edited manuscript or a results file an analysis has just written does not mark a dataset or a result dirty. A dataset built by `run_configurations` from a list of configurations writes a manifest of the same kind, with no specification; a directory of runs with no manifest at all is listed by `python -m plantbench datasets` with its provenance unknown.
+The commit is recorded only when the library runs from a checkout of its repository; an installed copy records none. The dirty flag looks at the code alone, `plantbench/` and `studies/` without their results and figures, so an edited manuscript or a results file an analysis has just written does not mark a dataset or a result dirty. A dataset built by `run_configurations` from a list of configurations writes a manifest of the same kind, with no specification; a directory of runs with no manifest at all is listed by `plantbench datasets` with its provenance unknown.
 
 ## Reading a dataset
 
@@ -225,14 +220,14 @@ def _outcome(tr):
 
 `task.labelers()` and `task.metrics()` list what is registered. The metrics provided are `balanced_accuracy`, `accuracy`, `found` and `false_alarms`; a new one is registered the same way with `@task.metric`, and takes `(y, prediction, positive)`.
 
-A task does not decide which runs exist, so it leaves `Spec.fingerprint` and a dataset's specification digest alone. `Spec.protocol_digest` names the specification and the task together, and that is what a method reports against. A dataset generated from a specification that carries a task records the protocol in its manifest, and `python -m plantbench datasets` then shows it in a column of its own.
+A task does not decide which runs exist, so it leaves `Spec.fingerprint` and a dataset's specification digest alone. `Spec.protocol_digest` names the specification and the task together, and that is what a method reports against. A dataset generated from a specification that carries a task records the protocol in its manifest, and `plantbench datasets` then shows it in a column of its own.
 
-Tasks need scikit-learn, which the rest of the library does not: `pip install 'plantbench[study]'`.
+Tasks need scikit-learn, which the rest of the library does not. It is in the `study` extra: `uv sync --extra dev --extra study`, `pixi install -e study`, or `pip install -e '.[dev,study]'`.
 
 ## What is on disk
 
 ```
-python -m plantbench datasets
+plantbench datasets
 ```
 
 lists every dataset under `data/`, one row each: the directory, the case, the identifier of the specification the runs are of, the commit that generated them and whether that tree was clean, the runs by status, the integration time they cost, and whether the specification left in the directory still describes them. A digest is the first twelve hex characters of the SHA-256 of the fingerprint, so two datasets of one protocol carry the same digest and a changed protocol carries a different one. It is printed with a prefix naming what was hashed, `pb-spec:<digest>` for the specification without its task and `pb-protocol:<digest>` for the specification with it, so that it is not read as a commit. `plantbench.datasets.summary("data/example")` returns the same record as a dictionary.
@@ -240,7 +235,7 @@ lists every dataset under `data/`, one row each: the directory, the case, the id
 ## Reporting a dataset
 
 ```
-python -m plantbench card data/example --format latex
+plantbench card data/example --format latex
 ```
 
 prints what a paper reports about a dataset: the study and case, the version and commit of the code that generated it, the specification file with its `pb-spec` identifier, the protocol with its `pb-protocol` identifier when the specification carries a task, how the runs ended and what they cost, and the Python, NumPy and SciPy versions. `--format` takes `text` (the default), `md` for a README or supplement, `latex` for the rows of a two-column table, and `json`, which adds the full SHA-256 of each fingerprint. Every format carries a sentence defining the identifiers, which in a paper belongs in the table caption. A card also warns when the report would be weaker than it looks: a dataset generated from uncommitted code, one without a manifest, or one whose kept specification no longer describes its runs.
@@ -248,7 +243,7 @@ prints what a paper reports about a dataset: the study and case, the version and
 A reader checks the identifiers against the specification file, or against a dataset, with
 
 ```
-python -m plantbench verify data/example/spec.toml pb-spec:1a2b3c4d5e6f pb-protocol:6f5e4d3c2b1a
+plantbench verify data/example/spec.toml pb-spec:1a2b3c4d5e6f pb-protocol:6f5e4d3c2b1a
 ```
 
 which prints `match` or `MISMATCH` for each identifier and exits non-zero on any mismatch. A bare digest is checked against both kinds, and a digest longer than twelve characters is checked as a prefix of the full SHA-256. `plantbench.report.card` and `plantbench.report.verify` return the same as data.
@@ -256,7 +251,7 @@ which prints `match` or `MISMATCH` for each identifier and exits non-zero on any
 ## Comparing two datasets
 
 ```
-python -m plantbench compare data/example-old data/example
+plantbench compare data/example-old data/example
 ```
 
 reports what two generations disagree on: manifest fields, runs recorded in one only, runs whose status differs, recorded features that moved, runs that took a different path through the integrator, and trajectories that differ, with the largest relative deviation of each. Wall time is reported on a line of its own rather than counted as a difference, being a property of the machine and the moment. `--tol` sets the relative tolerance, `1e-9` by default; `--no-trajectories` compares the records alone; `--limit` caps the lines printed per section.
@@ -264,7 +259,7 @@ reports what two generations disagree on: manifest fields, runs recorded in one 
 The same command takes two results files:
 
 ```
-python -m plantbench compare old/results.txt new/results.txt
+plantbench compare old/results.txt new/results.txt
 ```
 
 Lines are paired by their text with the numbers masked out, so that two reports of the same quantities align, and paired lines are then compared number by number against the tolerance. Lines that differ in their text are listed apart from those whose numbers moved.

@@ -1,7 +1,7 @@
 cff-version: 1.2.0
-message: "If you use plantbench, please cite the paper that introduces it."
+message: "If you use plantbench, please cite the paper that introduces it. A case presented in a publication of its own gives that publication in the Citation section of its case card; please cite it as well when you use the case."
 title: "plantbench: a library of plantwide process simulations"
-version: 0.1.0
+version: 0.2.0
 license: BSD-3-Clause
 repository-code: "https://github.com/lbrice1/plantbench"
 url: "https://plantbench.readthedocs.io"

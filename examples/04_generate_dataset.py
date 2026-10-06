@@ -2,7 +2,7 @@
 
     .venv/bin/python examples/04_generate_dataset.py [OUT_DIR]
 
-The same as `python -m plantbench generate examples/04_dataset.toml`.  Every run's
+The same as `plantbench generate examples/04_dataset.toml`.  Every run's
 configuration, cost and linear features are in index.csv; its trajectory is in
 runs/<run_id>.npz.  Run it twice: the second time there is nothing left to do.
 

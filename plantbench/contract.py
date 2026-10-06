@@ -9,7 +9,7 @@ them from its own tests,
     def test_contract(check):
         check(CASE)
 
-or from the command line, `python -m plantbench check <case>`.  A case that fails one is
+or from the command line, `plantbench check <case>`.  A case that fails one is
 a defect in the case or in the interface; if the interface is at fault, it is fixed in
 core rather than special-cased for the plant.
 
@@ -21,7 +21,6 @@ its own tests and its dependencies.  `JUDGMENT` lists those that cannot.
 from __future__ import annotations
 
 import ast
-import importlib
 import sys
 import tomllib
 from dataclasses import dataclass
@@ -216,14 +215,9 @@ JUDGMENT = (
     "correction and its evidence.",
     "The case card states the provenance of every published number the case reproduces.",
     "The name describes the process, and no number, version, author or source is in it.",
+    "A case presented in a publication of its own gives that publication in a Citation "
+    "section of its case card.",
 )
-
-
-def package_dir(case: Case) -> Path:
-    """The directory of the package that defines a case: that of its `make_design`."""
-    module = sys.modules.get(case.make_design.__module__) \
-        or importlib.import_module(case.make_design.__module__)
-    return Path(module.__file__).resolve().parent
 
 
 def project_dir(path: Path) -> Path | None:
@@ -267,7 +261,7 @@ def imports_only_what_a_case_may(case: Case) -> None:
     """A case imports core, units and heat from the library, no other case, and nothing
     outside the standard library, NumPy and SciPy that its project does not declare in
     an extra."""
-    here = package_dir(case)
+    here = cases.package_dir(case)
     project = project_dir(here)
     declared = _extras(project) if project is not None else set()
     own = here.name
@@ -293,13 +287,16 @@ def imports_only_what_a_case_may(case: Case) -> None:
 
 
 def has_a_case_card(case: Case) -> None:
-    """A README.md beside the definition, with a heading for each section of a card."""
-    card = package_dir(case) / "README.md"
+    """A README.md beside the definition, with a heading for each section of a card, and
+    a reference under its Citation heading if it has one."""
+    card = cases.package_dir(case) / "README.md"
     _require(card.exists(), f"no case card at {card}")
     headings = [line.lstrip("#").strip().lower()
                 for line in card.read_text().splitlines() if line.startswith("## ")]
     missing = [s for s in CARD_SECTIONS if not any(s in h for h in headings)]
     _require(not missing, f"{card} has no section on {', '.join(missing)}")
+    _require(cases.card_section(card.read_text(), "citation") != "",
+             f"{card} has a Citation section with nothing in it")
 
 
 def has_tests_of_its_own(case: Case) -> None:
@@ -307,7 +304,7 @@ def has_tests_of_its_own(case: Case) -> None:
 
     Looked for in `tests/cases/<id>/` for a built-in case, and in the project's `tests/`
     for one in its own package, in a file other than one holding only the contract."""
-    here = package_dir(case)
+    here = cases.package_dir(case)
     project = project_dir(here)
     if case.id in cases._MODULES:
         where = project / "tests" / "cases" / case.id if project else None

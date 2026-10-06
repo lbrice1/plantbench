@@ -1,7 +1,7 @@
 """Reporting a dataset: the card a paper quotes, and the check a reader runs against it.
 
-    python -m plantbench card data/regimes [--format text|md|latex|json]
-    python -m plantbench verify data/regimes/spec.toml pb-protocol:dab0d47475e9
+    plantbench card data/regimes [--format text|md|latex|json]
+    plantbench verify data/regimes/spec.toml pb-protocol:dab0d47475e9
 
 `card` gathers what a dataset records about itself -- its study and case, the version and
 commit of the code that generated it, its specification and protocol, how its runs ended
@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from plantbench import datagen, datasets
+from plantbench import cases, datagen, datasets
 from plantbench.core.spec import PROTOCOL_ID, SPEC_ID, Spec, digest, identifier, parse_identifier
 
 FORMATS = ("text", "md", "latex", "json")
@@ -37,12 +37,14 @@ def card(out_dir: str | Path) -> dict:
     spec_file = next((out / name for name in ("spec.toml", "spec.json")
                       if (out / name).exists()), None)
     fingerprint, protocol = m.get("spec_fingerprint"), m.get("protocol_fingerprint")
+    citation, citation_warning = _case_citation(s["case"])
     c = {
         "dataset": str(out),
         "study": s["study"],
         "case": s["case"],
         "case_source": (datasets.case_source_text(s["case_source"])
                         if s["case_source"] is not None else None),
+        "case_citation": citation,
         "plantbench": m.get("plantbench"),
         "commit": (f"{s['git_commit'][:7]}, "
                    + {True: "uncommitted changes", False: "clean", None: "state unknown"}[
@@ -56,13 +58,29 @@ def card(out_dir: str | Path) -> dict:
         "runs": s["counts"],
         "wall_time": s["wall_time"],
         "environment": {k: m[k] for k in ("python", "numpy", "scipy", "platform") if k in m},
-        "warnings": _warnings(s, spec_file),
+        "warnings": _warnings(s, spec_file) + ([citation_warning] if citation_warning else []),
     }
     c["reproduce"] = _reproduce(c)
-    c["verify"] = (f"python -m plantbench verify {c['spec_file']} "
+    c["verify"] = (f"plantbench verify {c['spec_file']} "
                    f"{c['protocol_id'] or c['spec_id']}"
                    if c["spec_file"] and c["spec_id"] else None)
     return c
+
+
+def _case_citation(case_id: str | None) -> tuple[dict | None, str | None]:
+    """The publication the dataset's case was presented in, read from the card of the case
+    as it is installed now, and a warning when the case cannot be loaded to read it.
+
+    Any failure is caught: a case that is not installed, or whose package is broken,
+    leaves the rest of the dataset's card as it would be without it."""
+    if case_id is None:
+        return None, None
+    try:
+        return cases.citation(cases.load_case(case_id)), None
+    except Exception as exc:  # noqa: BLE001 -- reported in the card's warnings
+        return None, (f"the case {case_id} could not be loaded ({type(exc).__name__}: "
+                      f"{exc}), so whether it has a publication of its own to cite is "
+                      "not known")
 
 
 def _warnings(s: dict, spec_file: Path | None) -> list[str]:
@@ -92,7 +110,7 @@ def _reproduce(c: dict) -> list[str]:
     needs = f"with plantbench {c['plantbench']}" if c["plantbench"] else "with plantbench"
     if c["case_source"] is not None:
         needs += f" and the case {c['case']} installed"
-    return [needs + ":", f"python -m plantbench generate {c['spec_file']}"]
+    return [needs + ":", f"plantbench generate {c['spec_file']}"]
 
 
 def definition(c: dict) -> str:
@@ -122,6 +140,8 @@ def rows(c: dict) -> list[tuple[str, str]]:
     out = [("Study", f"`{c['study']}`" if c["study"] else "not recorded"),
            ("Case", case if c["case"] else "not recorded"), ("Code", code),
            ("Specification", spec)]
+    if c["case_citation"]:
+        out.insert(2, ("Case citation", c["case_citation"]["reference"]))
     if c["protocol_id"]:
         out.append(("Protocol", f"specification with its task; `{c['protocol_id']}`"))
     out.append(("Runs", ", ".join(runs) + f"; {_hours(c['wall_time'])} of integration"))

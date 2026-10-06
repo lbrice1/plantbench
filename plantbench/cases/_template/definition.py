@@ -1,6 +1,6 @@
 """Template case, the definition: what the library needs to know about the model.
 
-`python -m plantbench new-case <id>` copies this template into a package of its own,
+`plantbench new-case <id>` copies this template into a package of its own,
 which declares `CASE` as an entry point so that plantbench finds it by its id.  A case
 can also be made available for a session with `@plantbench.case` or
 `plantbench.register(CASE)`, and a case in the library is listed in

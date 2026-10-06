@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
 
 jobs:
@@ -25,6 +25,31 @@ jobs:
       - run: ruff check .
       # The default selection: everything but the slow golden test of designs.txt.
       - run: python -m pytest -q
+
+  # The environments of the lockfiles, which must agree with pyproject.toml.
+  uv:
+    runs-on: ubuntu-latest
+    env:
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v10.2.0
+      - run: uv sync --locked --extra dev
+      - run: uv run plantbench --help
+      - run: uv run pytest -q
+
+  pixi:
+    runs-on: ubuntu-latest
+    env:
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          locked: true
+      - run: pixi run plantbench --help
+      - run: pixi run lint
+      - run: pixi run test
 
   docs:
     runs-on: ubuntu-latest

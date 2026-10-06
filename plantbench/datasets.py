@@ -1,8 +1,8 @@
 """Reading the datasets on disk: what is there, what a result was computed from, and how
 two of them differ.
 
-    python -m plantbench datasets
-    python -m plantbench compare data/regimes-old data/regimes
+    plantbench datasets
+    plantbench compare data/regimes-old data/regimes
 
 A dataset describes itself as it is generated (`datagen.py`).  `summary` reads that
 description back: which specification the runs are of, which commit generated them, how

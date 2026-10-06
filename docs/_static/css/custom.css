@@ -1,0 +1,142 @@
+/* Additions to sphinx_rtd_theme: the logo in the navigation header, the installer tabs,
+   and a dark scheme following the reader's system setting, which the theme lacks. */
+
+.wy-side-nav-search > a img.logo {
+  max-width: 85%;
+  padding: 4px 0;
+}
+
+/* Installer tabs: the theme's link blue for the active tab. */
+.sd-tab-set {
+  --sd-color-tabs-label-active: #2980b9;
+  --sd-color-tabs-underline-active: #2980b9;
+  --sd-color-tabs-label-hover: #2980b9;
+  --sd-color-tabs-underline-hover: #c9c9c9;
+}
+.sd-tab-set > label {
+  font-weight: 600;
+}
+.sd-tab-content .highlight {
+  margin-bottom: 0;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --pb-bg: #1d1f21;
+    --pb-bg-raised: #26292c;
+    --pb-bg-code: #2a2d31;
+    --pb-border: #3b3f44;
+    --pb-text: #d6d4cf;
+    --pb-text-muted: #a3a19c;
+    --pb-heading: #ecebe7;
+    --pb-link: #6cb4e8;
+    --pb-link-visited: #b39ddb;
+  }
+
+  body,
+  .wy-body-for-nav,
+  .wy-nav-content-wrap,
+  .wy-nav-content {
+    background: var(--pb-bg);
+    color: var(--pb-text);
+  }
+  .wy-nav-top {
+    background: #343131;
+  }
+
+  .rst-content h1, .rst-content h2, .rst-content h3,
+  .rst-content h4, .rst-content h5, .rst-content h6 {
+    color: var(--pb-heading);
+  }
+  a, .rst-content a { color: var(--pb-link); }
+  a:visited, .rst-content a:visited { color: var(--pb-link-visited); }
+  .wy-breadcrumbs li a,
+  .rst-content .headerlink { color: var(--pb-link); }
+  hr, .rst-content hr { border-top-color: var(--pb-border); }
+  footer, .rst-footer-buttons, footer p { color: var(--pb-text-muted); }
+  .btn-neutral {
+    background: var(--pb-bg-raised) !important;
+    color: var(--pb-text) !important;
+    border-color: var(--pb-border);
+  }
+
+  /* Inline code and code blocks. */
+  .rst-content code, .rst-content tt, code,
+  .rst-content code.literal, .rst-content tt.literal {
+    background: var(--pb-bg-code);
+    border-color: var(--pb-border);
+    color: #f0a35e;
+  }
+  .rst-content code.xref, .rst-content a code,
+  .rst-content a code.literal, .rst-content code.xref.literal { color: var(--pb-link); }
+  .rst-content div[class^="highlight"], .rst-content pre.literal-block {
+    background: var(--pb-bg-code);
+    border-color: var(--pb-border);
+  }
+  .highlight { background: var(--pb-bg-code); color: var(--pb-text); }
+  .highlight .c, .highlight .c1, .highlight .cm, .highlight .cs, .highlight .ch { color: #8a9199; }
+  .highlight .k, .highlight .kn, .highlight .kd, .highlight .kc,
+  .highlight .kr, .highlight .ow { color: #6cb4e8; }
+  .highlight .s, .highlight .s1, .highlight .s2, .highlight .sd,
+  .highlight .sa, .highlight .se, .highlight .si { color: #a8d08d; }
+  .highlight .m, .highlight .mf, .highlight .mi { color: #e0b878; }
+  .highlight .nf, .highlight .fm { color: #e6c07b; }
+  .highlight .nc, .highlight .nn { color: #e6c07b; }
+  .highlight .nb, .highlight .bp { color: #c49bd8; }
+  .highlight .o, .highlight .p, .highlight .n { color: var(--pb-text); }
+  .highlight .gp, .highlight .go { color: var(--pb-text-muted); }
+  .highlight .hll { background: #3a3d23; }
+
+  /* Tables. */
+  .rst-content table.docutils,
+  .rst-content table.docutils td,
+  .rst-content table.docutils th,
+  .wy-table-bordered-all td, .wy-table-bordered-all th {
+    border-color: var(--pb-border);
+  }
+  .rst-content table.docutils thead th { background: var(--pb-bg-raised); color: var(--pb-heading); }
+  .rst-content table.docutils:not(.field-list) tr:nth-child(2n-1) td,
+  .wy-table-striped tr:nth-child(2n-1) td { background: var(--pb-bg-raised); }
+  .rst-content table.docutils td { background: var(--pb-bg); }
+
+  /* Admonitions. */
+  .rst-content .admonition, .rst-content .note, .rst-content .seealso,
+  .rst-content .tip, .rst-content .hint, .rst-content .important,
+  .rst-content .warning, .rst-content .caution, .rst-content .attention,
+  .rst-content .danger, .rst-content .error {
+    background: var(--pb-bg-raised);
+  }
+
+  /* API reference signatures. */
+  .rst-content dl:not(.docutils) dt,
+  html.writer-html5 .rst-content dl[class]:not(.option-list):not(.field-list):not(.footnote):not(.citation):not(.glossary):not(.simple) > dt {
+    background: var(--pb-bg-raised);
+    border-top-color: var(--pb-link);
+    color: var(--pb-heading);
+  }
+  html.writer-html5 .rst-content dl[class]:not(.option-list):not(.field-list):not(.footnote):not(.citation):not(.glossary):not(.simple) dl:not(.field-list) > dt {
+    background: var(--pb-bg-code);
+    border-left-color: var(--pb-border);
+    color: var(--pb-heading);
+  }
+  .rst-content dl .sig-name, .rst-content code.descname { color: var(--pb-heading); }
+
+  /* Search. */
+  .wy-side-nav-search input[type="text"] {
+    background: var(--pb-bg-raised);
+    border-color: var(--pb-border);
+    color: var(--pb-text);
+  }
+  .rst-content .highlighted { background: #5a4a1a; color: var(--pb-heading); }
+
+  /* Installer tabs. */
+  .sd-tab-set {
+    --sd-color-tabs-label-active: var(--pb-link);
+    --sd-color-tabs-underline-active: var(--pb-link);
+    --sd-color-tabs-label-hover: var(--pb-link);
+    --sd-color-tabs-label-inactive: var(--pb-text-muted);
+    --sd-color-tabs-underline-inactive: var(--pb-border);
+    --sd-color-tabs-overline: var(--pb-border);
+    --sd-color-tabs-underline: var(--pb-border);
+  }
+}
