@@ -92,7 +92,7 @@ CASE = Case(
         "The reference reactor on its own: first-order exothermic A -> B, three states, "
         "three steady states, and a design point on the open-loop unstable middle "
         "branch. Structures from open loop to the composition cascade. Its steady state "
-        "and eigenvalues reproduce the published values once three corrections to the "
+        "and eigenvalues reproduce the published values once three modifications to the "
         "published parameter table are applied."
     ),
     options=OPTIONS,

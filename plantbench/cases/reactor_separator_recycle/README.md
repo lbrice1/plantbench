@@ -7,7 +7,7 @@ case = pb.load_case("reactor_separator_recycle")
 
 ## Provenance
 
-The plant follows the plantwide control example of Romagnoli and Palazoglu (2020). The reactor is their non-isothermal CSTR, with three corrections to its published parameter table recorded in `plantbench/units/parameters.py`. The model, the code and the analyses are original. The case is frozen. Its reference configuration reproduces `studies/reactor_separator_recycle/results/reference.txt` and `designs.txt` byte for byte, which `tests/cases/reactor_separator_recycle/test_golden.py` checks. Any extension is an option that is off by default.
+The plant is an extension of the reactor control example of Romagnoli and Palazoglu (2020). The reactor is their non-isothermal CSTR, with three modifications to its published parameter table recorded in `plantbench/units/parameters.py`. The model, the code and the analyses are original. The case is frozen. Its reference configuration reproduces `studies/reactor_separator_recycle/results/reference.txt` and `designs.txt` byte for byte, which `tests/cases/reactor_separator_recycle/test_golden.py` checks. Any extension is an option that is off by default.
 
 ## Process
 

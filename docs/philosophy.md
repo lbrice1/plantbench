@@ -32,7 +32,7 @@ A case's **reference configuration** is the one with only the default structure 
 
 ## Frozen cases
 
-`reactor_separator_recycle` follows the plantwide control example of Romagnoli and Palazoglu (2020), and the numbers reported for it are transcribed from its results files. It is frozen: its reference configuration must reproduce `studies/reactor_separator_recycle/results/reference.txt` and `designs.txt` byte for byte, and `tests/cases/reactor_separator_recycle/test_golden.py` checks that it does. Everything added to `reactor_separator_recycle` since has been added as an option that is off by default. A change that would move a reference number is a new option or a new case, not an edit.
+`reactor_separator_recycle` is an extension of the reactor control example of Romagnoli and Palazoglu (2020), and the numbers reported for it are transcribed from its results files. It is frozen: its reference configuration must reproduce `studies/reactor_separator_recycle/results/reference.txt` and `designs.txt` byte for byte, and `tests/cases/reactor_separator_recycle/test_golden.py` checks that it does. Everything added to `reactor_separator_recycle` since has been added as an option that is off by default. A change that would move a reference number is a new option or a new case, not an edit.
 
 ## Conventions
 

@@ -7,7 +7,7 @@ case = pb.load_case("jacketed_cstr")
 
 ## Provenance
 
-The non-isothermal CSTR of Romagnoli and Palazoglu (2020) on its own, as their constant-volume model. It is the same reactor that sits inside `reactor_separator_recycle`, with the same three corrections to the published parameter table (`plantbench/units/parameters.py`), and it reproduces the published steady state and eigenvalues. It is the smallest case in the library and the simplest one to start from.
+The non-isothermal CSTR of Romagnoli and Palazoglu (2020) on its own, as their constant-volume model. It is the same reactor that sits inside `reactor_separator_recycle`, with the same three modifications to the published parameter table (`plantbench/units/parameters.py`), and it reproduces the published steady state and eigenvalues. It is the smallest case in the library and the simplest one to start from.
 
 ## Process
 

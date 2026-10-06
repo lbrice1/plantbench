@@ -1,6 +1,6 @@
 """The reactor must reproduce the reference (Romagnoli and Palazoglu, 2020) before anything is built on top of it.
 
-These are the gating tests.  If they fail, the three parameter corrections recorded in
+These are the gating tests.  If they fail, the three parameter modifications recorded in
 `parameters.py` are wrong and every number downstream is unsupported.
 """
 

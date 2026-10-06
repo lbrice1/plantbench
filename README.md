@@ -27,7 +27,7 @@ plantbench generate examples/04_dataset.toml --workers 8
 
 | Case | States | Description |
 |---|---|---|
-| `reactor_separator_recycle` | 134 (base plant) | A non-isothermal CSTR on the open-loop unstable branch of its multiplicity, in a recycle loop closed by a thirty-stage column with a purge; four heat-exchanger networks at three column pressures; four regulatory structures. Follows the plantwide control example of Romagnoli and Palazoglu (2020); frozen. |
+| `reactor_separator_recycle` | 134 (base plant) | A non-isothermal CSTR on the open-loop unstable branch of its multiplicity, in a recycle loop closed by a thirty-stage column with a purge; four heat-exchanger networks at three column pressures; four regulatory structures. Extends the reactor control example of Romagnoli and Palazoglu (2020); frozen. |
 | `jacketed_cstr` | 3 | The same reactor on its own, with three steady states and structures from open loop to a composition cascade. |
 
 Each case has a card in `plantbench/cases/<case>/README.md`. Cases are named for the process they model, following the convention in `docs/adding-a-case.md`.
