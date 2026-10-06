@@ -4,8 +4,8 @@ are the reference values used by `reactor_separator_recycle` and `jacketed_cstr`
 
 The parameter table of the reference (its Table 17.1) does not reproduce the steady state
 and eigenvalues it reports.  Three defects were identified by solving backwards from the steady state in
-Table 17.2 (C_A = 2.353 kmol/m3, T = 362.4 K, T_j = 345.69 K); each correction is marked
-CORRECTION below with the evidence for it.  With all three applied, the eigenvalues of
+Table 17.2 (C_A = 2.353 kmol/m3, T = 362.4 K, T_j = 345.69 K); each modification is marked
+MODIFICATION below with the evidence for it.  With all three applied, the eigenvalues of
 the linearized reactor are -0.799, -0.1349, +0.0595, against the -0.7989, -0.1349, +0.060
 reported in the reference.
 
@@ -39,7 +39,7 @@ class ReactorParameters:
     # -- feed -----------------------------------------------------------------
     CA0: float = 5.0  # kmol/m3
     F0: float = 3.2  # m3/min
-    # CORRECTION: T0 is absent from Table 17.1 altogether.  Solving the three
+    # MODIFICATION: T0 is absent from Table 17.1 altogether.  Solving the three
     # steady-state balances with T pinned to the published 362.4 K gives
     # T0 = 336.97 K, and with it C_A = 2.3565 and T_j = 345.78 against the
     # published 2.353 and 345.69, and eigenvalues +0.060, -0.135, -0.799 against
@@ -54,7 +54,7 @@ class ReactorParameters:
     rho: float = 1500.0  # kg/m3
     cp: float = 3.9  # kJ/kg K
     A_ht: float = 42.08  # m2
-    # CORRECTION: Table 17.1 gives Ut = 20124 kJ/(h m2 C) while every flow in the
+    # MODIFICATION: Table 17.1 gives Ut = 20124 kJ/(h m2 C) while every flow in the
     # table is per minute.  The model runs in minutes, so U = Ut/60 = 335.4.
     # The jacket energy balance at the Table 17.2 steady state independently
     # requires 332.95 kJ/(min m2 K), a 0.7% match on rounded state values.
@@ -63,7 +63,7 @@ class ReactorParameters:
     # -- jacket ---------------------------------------------------------------
     Fj: float = 1.092  # m3/min
     Tj0: float = 294.4  # K
-    # CORRECTION: Table 17.1 prints 5.4 m3.  With 5.4 the eigenvalues come out
+    # MODIFICATION: Table 17.1 prints 5.4 m3.  With 5.4 the eigenvalues come out
     # -0.884, -0.133, +0.060; with the 6.0 m3 used in the Simulink model they are
     # -0.799, -0.1349, +0.0595, matching the reference eigenvalues to three decimals.
     Vj: float = 6.0  # m3
@@ -167,7 +167,7 @@ class ThermoParameters:
 
 
 def reference_parameters() -> ReactorParameters:
-    """Reactor parameters as the reference intends them, with the three corrections."""
+    """Reactor parameters as the reference intends them, with the three modifications."""
     return ReactorParameters()
 
 
