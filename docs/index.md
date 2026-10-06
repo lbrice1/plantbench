@@ -15,17 +15,62 @@ traj = pb.run(case, config, t_end=1500.0, dt=1.0)
 ```
 
 ```
-python -m plantbench generate examples/04_dataset.toml --workers 8
+plantbench generate examples/04_dataset.toml --workers 8
 ```
 
 ## Installation
 
-Python 3.11 or later, from a clone of [the repository](https://github.com/lbrice1/plantbench):
+Python 3.11 or later, from a clone of [the repository](https://github.com/lbrice1/plantbench). The environment is managed by [uv](https://docs.astral.sh/uv/), by [pixi](https://pixi.sh), or by pip in a virtual environment; uv and pixi install the versions recorded in `uv.lock` and `pixi.lock`.
+
+```
+git clone https://github.com/lbrice1/plantbench
+cd plantbench
+```
+
+::::{tab-set}
+:sync-group: installer
+
+:::{tab-item} uv
+:sync: uv
+
+```
+uv sync --extra dev                  # the library and its tests
+uv sync --extra dev --extra study    # and the studies
+uv run plantbench --help
+uv run pytest -q
+```
+
+Commands run in the environment through `uv run`, or directly after `source .venv/bin/activate`.
+:::
+
+:::{tab-item} pixi
+:sync: pixi
+
+```
+pixi install                         # the library and its tests
+pixi install -e study                # and the studies
+pixi run plantbench --help
+pixi run test
+```
+
+Commands run in the environment through `pixi run` (`pixi run -e study` for the studies), or directly inside `pixi shell`. NumPy, SciPy and Python come from conda-forge.
+:::
+
+:::{tab-item} pip
+:sync: pip
 
 ```
 python3 -m venv .venv
-.venv/bin/pip install -e .
+.venv/bin/pip install -e ".[dev]"          # the library and its tests
+.venv/bin/pip install -e ".[dev,study]"    # and the studies
+.venv/bin/plantbench --help
+.venv/bin/python -m pytest -q
 ```
+:::
+
+::::
+
+The examples on these pages write `plantbench` for the command line; `python -m plantbench` is equivalent.
 
 ## Contents
 
@@ -52,6 +97,10 @@ Territo, K., Briceno-Mena, L. A. and Romagnoli, J. A. (2027). A Plantwide Simula
   note      = {Submitted}
 }
 ```
+
+:::{note}
+Some cases were introduced in a publication of their own. The [card](cases/index.md) of such a case gives that publication in a Citation section, and `plantbench describe <case>` prints it. When you use such a case, please cite its publication.
+:::
 
 `plantbench` is distributed under the BSD 3-Clause license.
 

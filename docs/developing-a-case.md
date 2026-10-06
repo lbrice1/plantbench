@@ -2,16 +2,58 @@
 
 A case does not have to be part of the library to use it. A plant developed in a package of its own is found by its id like a built-in case, and runs, generates datasets, carries tasks and is analyzed exactly as one. Adding it to the library later is a move of one directory ([Adding a case](adding-a-case.md)).
 
-The workflow:
+The workflow, from the environment plantbench is installed in ([Installation](index.md#installation)):
+
+::::{tab-set}
+:sync-group: installer
+
+:::{tab-item} uv
+:sync: uv
 
 ```
-python -m plantbench new-case my_tank ~/work/my_tank   # a package, from the template
-pip install -e ~/work/my_tank                           # plantbench now finds my_tank
-pytest ~/work/my_tank                                   # the contract, on the case
-python -m plantbench check my_tank                      # the same, with a residual report
-python -m plantbench generate spec.toml --workers 8     # a dataset; the spec names my_tank
-python -m plantbench check my_tank --contribute         # before proposing it to the library
+uv run plantbench new-case my_tank ~/work/my_tank      # a package, from the template
+uv pip install -e ~/work/my_tank'[test]'               # plantbench now finds my_tank
+uv run pytest ~/work/my_tank                           # the contract, on the case
+uv run plantbench check my_tank                        # the same, with a residual report
+uv run plantbench generate spec.toml --workers 8       # a dataset; the spec names my_tank
+uv run plantbench check my_tank --contribute           # before proposing it to the library
 ```
+
+`uv run` keeps the case installed, and so does `uv sync --inexact`; a plain `uv sync` restores the locked environment exactly and removes it, after which `uv pip install -e` installs it again.
+:::
+
+:::{tab-item} pixi
+:sync: pixi
+
+A pixi workspace of your own holds plantbench and the case, so the library's manifest is left unchanged:
+
+```
+pixi init ~/work/my_work && cd ~/work/my_work
+pixi add "python>=3.11"
+pixi add --pypi --editable "plantbench @ file:///path/to/plantbench"   # the clone
+pixi run plantbench new-case my_tank                   # a package, from the template
+pixi add --pypi --editable "my_tank[test] @ file://$PWD/my_tank"       # plantbench now finds my_tank
+pixi run pytest my_tank                                # the contract, on the case
+pixi run plantbench check my_tank                      # the same, with a residual report
+pixi run plantbench generate spec.toml --workers 8     # a dataset; the spec names my_tank
+pixi run plantbench check my_tank --contribute         # before proposing it to the library
+```
+:::
+
+:::{tab-item} pip
+:sync: pip
+
+```
+plantbench new-case my_tank ~/work/my_tank             # a package, from the template
+pip install -e ~/work/my_tank'[test]'                  # plantbench now finds my_tank
+pytest ~/work/my_tank                                  # the contract, on the case
+plantbench check my_tank                               # the same, with a residual report
+plantbench generate spec.toml --workers 8              # a dataset; the spec names my_tank
+plantbench check my_tank --contribute                  # before proposing it to the library
+```
+:::
+
+::::
 
 ## Starting from the template
 
@@ -40,7 +82,7 @@ Plantbench finds a case in three places, in this order.
 my_tank = "my_tank.definition:CASE"
 ```
 
-This is what `new-case` writes. Once the package is installed (`pip install -e` while developing), every process finds the case: a script, the command line, and each worker of a dataset generation.
+This is what `new-case` writes. Once the package is installed (`pip install -e`, `uv pip install -e` or `pixi add --pypi --editable` while developing), every process finds the case: a script, the command line, and each worker of a dataset generation.
 
 **Session.** A case defined in a script or notebook, without a package:
 
@@ -85,7 +127,7 @@ def test_contract(check):
     check(CASE)
 ```
 
-`python -m plantbench check my_tank` runs them without pytest and reports how far the open-loop design point is from a steady state, which is the first thing to look at when the fixed-point check fails. The case's own tests, of conservation, analytic limits and the published values it reproduces, go beside the contract in `tests/`.
+`plantbench check my_tank` runs them without pytest and reports how far the open-loop design point is from a steady state, which is the first thing to look at when the fixed-point check fails. The case's own tests, of conservation, analytic limits and the published values it reproduces, go beside the contract in `tests/`.
 
 ## Using the case
 
@@ -99,10 +141,10 @@ A specification names it in its `[study]` table, and `generate`, `datasets`, `co
 
 ## Provenance
 
-A dataset over a case that is not built in records where the case came from, beside the library version and commit it records for every dataset. The manifest's `case_source` holds the module, the distribution and its version for an installed package, and the commit of the checkout the case's module is in, with whether that checkout had uncommitted changes. `python -m plantbench datasets` prints it, and a results file stamped from the dataset carries it on a line of its own. A copy installed under site-packages records no commit, since the repository that encloses an environment is not the one that produced the code.
+A dataset over a case that is not built in records where the case came from, beside the library version and commit it records for every dataset. The manifest's `case_source` holds the module, the distribution and its version for an installed package, and the commit of the checkout the case's module is in, with whether that checkout had uncommitted changes. `plantbench datasets` prints it, and a results file stamped from the dataset carries it on a line of its own. A copy installed under site-packages records no commit, since the repository that encloses an environment is not the one that produced the code.
 
 Run ids and specification digests depend on the configuration and the case id only, so a dataset regenerated from the same case in the library after it is added reproduces the same ids.
 
 ## Contributing the case
 
-When the case is ready to be offered to the library, `python -m plantbench check my_tank --contribute` adds the library's rules to the contract: imports from the library's `core`, `units` and `heat` only, no other case, and no third-party import outside NumPy and SciPy that the project does not declare in an extra; a case card with every section; and tests of the case's own. It then lists the rules that need a reviewer's judgment. [Adding a case](adding-a-case.md#contributing-a-case-from-its-own-package) gives the steps of the pull request.
+When the case is ready to be offered to the library, `plantbench check my_tank --contribute` adds the library's rules to the contract: imports from the library's `core`, `units` and `heat` only, no other case, and no third-party import outside NumPy and SciPy that the project does not declare in an extra; a case card with every section; and tests of the case's own. It then lists the rules that need a reviewer's judgment. [Adding a case](adding-a-case.md#contributing-a-case-from-its-own-package) gives the steps of the pull request.

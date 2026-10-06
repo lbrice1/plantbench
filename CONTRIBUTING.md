@@ -2,11 +2,15 @@
 
 ## Setting up
 
+With uv, pixi or pip (see Installation in `README.md`):
+
 ```
-python3 -m venv .venv
-.venv/bin/pip install -e ".[dev]"
-.venv/bin/pre-commit install
+uv sync --extra dev && uv run pre-commit install
+pixi install && pixi run pre-commit install
+python3 -m venv .venv && .venv/bin/pip install -e ".[dev]" && .venv/bin/pre-commit install
 ```
+
+The commands below are written for the pip environment; with uv, replace `.venv/bin/` with `uv run `, and with pixi, with `pixi run `. A change to the dependencies in `pyproject.toml` is committed with `uv.lock` and `pixi.lock` regenerated (`uv lock`, `pixi lock`); continuous integration installs from both lockfiles and fails when either is out of date.
 
 Read `docs/philosophy.md` before changing the library. It holds the conventions the code keeps, and each exists because the alternative caused a problem.
 
@@ -18,11 +22,12 @@ Read `docs/philosophy.md` before changing the library. It holds the conventions 
 .venv/bin/pre-commit run --all-files
 ```
 
-Continuous integration (`.github/workflows/ci.yml`) runs the default selection of the suite on Python 3.11 and 3.14, ruff, and the documentation build on every pull request. The slow golden test is not part of it; run it yourself when a change touches `reactor_separator_recycle`.
+Continuous integration (`.github/workflows/ci.yml`) runs the default selection of the suite on Python 3.11 and 3.14 with pip, and once each in the environments locked by uv and pixi, ruff, and the documentation build on every pull request. The slow golden test is not part of it; run it yourself when a change touches `reactor_separator_recycle`.
 
 A change to `docs/` or to a docstring is checked by building the documentation, which fails on any warning, as it does on Read the Docs:
 
 ```
+pixi run docs                                                  # or, with pip:
 .venv/bin/pip install -e ".[docs]"
 .venv/bin/sphinx-build -W --keep-going -b html docs docs/_build/html
 ```
@@ -46,7 +51,7 @@ The hooks check whitespace, YAML and TOML, merge markers and file size, lint wit
 
 - Fork `lbrice1/plantbench` on GitHub and branch from `main` (`feat/<name>`, or `fix/<name>` for a bug fix).
 - Open the pull request against `main`.
-- A case added from a fork passes `python -m plantbench check <case> --contribute` and follows the steps in `docs/adding-a-case.md`, and a change to a frozen number owes the explanation above.
+- A case added from a fork passes `plantbench check <case> --contribute` and follows the steps in `docs/adding-a-case.md`, and a change to a frozen number owes the explanation above.
 
 ## Commit messages
 
@@ -54,7 +59,9 @@ The hooks check whitespace, YAML and TOML, merge markers and file size, lint wit
 
 ## Adding a case
 
-Follow `docs/adding-a-case.md`. A new case passes the contract (`plantbench.contract`) without any change to `plantbench/core` that serves only that case. A case developed in its own package with `python -m plantbench new-case` is added by the steps under "Contributing a case from its own package" there.
+Follow `docs/adding-a-case.md`. A new case passes the contract (`plantbench.contract`) without any change to `plantbench/core` that serves only that case. A case developed in its own package with `plantbench new-case` is added by the steps under "Contributing a case from its own package" there.
+
+A case that was presented in a publication of its own gives that publication in a `## Citation` section of its case card: the reference as the first paragraph, then its BibTeX. `plantbench describe` prints it and dataset cards list it, and the citation section of `README.md` asks users to cite it beside the library's paper.
 
 A case is named for the process it models, in lowercase words joined by underscores: a flowsheet by its principal units in flow order or its established name in the literature (`reactor_separator_recycle`, `tennessee_eastman`), a single unit by the unit and its defining feature (`jacketed_cstr`). No number, version or source goes in the name, and a published name is not changed. The full convention is in `docs/adding-a-case.md` under "Naming a case", and the contract checks it.
 

@@ -20,7 +20,7 @@ traj = pb.run(case, config, t_end=1500.0, dt=1.0)
 ```
 
 ```
-python -m plantbench generate examples/04_dataset.toml --workers 8
+plantbench generate examples/04_dataset.toml --workers 8
 ```
 
 ## Cases
@@ -35,22 +35,50 @@ Each case has a card in `plantbench/cases/<case>/README.md`. Cases are named for
 A plant of your own is a case in a package of its own, which plantbench finds by its id once installed, with every part of the library available to it:
 
 ```
-python -m plantbench new-case my_tank     # a package from the template, the contract test included
-pip install -e my_tank
-python -m plantbench check my_tank        # the contract every case keeps
+plantbench new-case my_tank     # a package from the template, the contract test included
+pip install -e my_tank          # or `uv pip install -e my_tank`
+plantbench check my_tank        # the contract every case keeps
 ```
 
-See `docs/developing-a-case.md`.
+See `docs/developing-a-case.md`, which also covers pixi.
 
 ## Installation
 
-Python 3.11 or later.
+Python 3.11 or later, from a clone of the repository. The environment is managed by [uv](https://docs.astral.sh/uv/), by [pixi](https://pixi.sh), or by pip in a virtual environment; uv and pixi install the versions recorded in `uv.lock` and `pixi.lock`.
+
+```
+git clone https://github.com/lbrice1/plantbench
+cd plantbench
+```
+
+### uv
+
+```
+uv sync --extra dev                  # the library and its tests
+uv sync --extra dev --extra study    # and the studies
+uv run plantbench --help
+```
+
+### pixi
+
+```
+pixi install                         # the library and its tests
+pixi install -e study                # and the studies
+pixi run plantbench --help
+```
+
+NumPy, SciPy and Python come from conda-forge.
+
+### pip
 
 ```
 python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"          # the library and its tests
 .venv/bin/pip install -e ".[dev,study]"    # and the studies
+.venv/bin/plantbench --help
 ```
+
+The commands below are written for the pip environment. With uv, replace `.venv/bin/` with `uv run `; with pixi, with `pixi run ` (`pixi run -e study ` for the studies). `python -m plantbench` is equivalent to `plantbench`.
 
 The reference results were produced with Python 3.14.7, NumPy 2.5.3, SciPy 1.18.1, scikit-learn 1.9.1, PaCMAP 0.9.1 and HDBSCAN 0.8.44 on macOS (arm64).
 
@@ -71,7 +99,7 @@ The study that accompanies the library is described in a manuscript submitted to
 .venv/bin/python -m studies.reactor_separator_recycle.designs    # designs.txt to results/, designs.pkl to cache/
 
 # The enumerated dataset of 2016 closed-loop runs (about 1.5 h on 10 cores) and its analysis
-.venv/bin/python -m plantbench generate studies/regimes/spec.toml --workers 10
+.venv/bin/plantbench generate studies/regimes/spec.toml --workers 10
 .venv/bin/python -m studies.regimes.analysis data/regimes
 
 # The deadtime sweep and the Sobol' indices: the damping ratio, then the outcome sample
@@ -97,7 +125,7 @@ Wall times depend on the machine and its load, so the integration times in a reg
 
 The two datasets were generated before the repository existed, so their manifests record no commit (`generated at no commit` in the results files). The analyses were run before the history was condensed into the release commit, at a commit the results files name as `6fc4e69` and this repository does not contain. Rerunning both analyses from the release commit reproduces every number in the two results files.
 
-The identifiers reported in the manuscript, `pb-spec:6a6fc673261b` for the enumerated dataset and `pb-protocol:dab0d47475e9` for the dataset with its early-window task, are printed in `results_regimes.txt`, and `python -m plantbench verify studies/regimes/spec.toml pb-spec:6a6fc673261b pb-protocol:dab0d47475e9` recomputes both.
+The identifiers reported in the manuscript, `pb-spec:6a6fc673261b` for the enumerated dataset and `pb-protocol:dab0d47475e9` for the dataset with its early-window task, are printed in `results_regimes.txt`, and `plantbench verify studies/regimes/spec.toml pb-spec:6a6fc673261b pb-protocol:dab0d47475e9` recomputes both.
 
 ## Layout
 
@@ -145,6 +173,8 @@ Territo, K., Briceno-Mena, L. A. and Romagnoli, J. A. (2027). A Plantwide Simula
   note      = {Submitted}
 }
 ```
+
+Some cases were introduced in a publication of their own. The card of such a case gives that publication in a Citation section, and `plantbench describe <case>` prints it. When you use such a case, please cite its publication.
 
 ## References
 
