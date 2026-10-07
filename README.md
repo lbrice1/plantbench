@@ -155,7 +155,8 @@ The identifiers reported in the manuscript, `pb-spec:6a6fc673261b` for the enume
 
 The documentation is at <https://plantbench.readthedocs.io>: the guides below, the case cards, the examples and the API reference.
 
-- `docs/tutorial.md`: installation, running a case, generating a dataset, and the tools around it, in one session.
+- `docs/tutorial/using.md`: installation, running a case, generating a dataset, and the tools around it, in one session.
+- `docs/tutorial/contributing.md`: a case from the template to the library with `plantbench contribute`, and back, in one session.
 - `docs/philosophy.md`: what a case is, the conventions the code keeps, and why.
 - `docs/user-guide.md`: running cases, configurations, non-idealities, disturbances, datasets.
 - `docs/developing-a-case.md`: a case in a package of its own, found by entry point or decorator, and used without adding it to the library.

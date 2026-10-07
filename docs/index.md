@@ -25,13 +25,13 @@ plantbench generate examples/04_dataset.toml --workers 8
 
 ## Contents
 
-- [Tutorial](tutorial.md): installation, running a case, generating a dataset, and the tools around it, in one session.
+- [Tutorial](tutorial.md): [using plantbench](tutorial/using.md), from installation to a scored task, and [contributing a case](tutorial/contributing.md), from the template to the library, each in one session.
 - [User guide](user-guide.md): running cases, configurations, non-idealities, disturbances, datasets and tasks.
 - [Design principles](philosophy.md): what a case is, the conventions the code keeps, and why.
 - [Cases](cases/index.md): the card of each case.
 - [Examples](examples.md): short scripts, each run by the test suite.
 - [Developing a case](developing-a-case.md): a case in a package of its own, used with every part of the library without adding it.
-- [Adding a case](adding-a-case.md): naming, the checklist, the contract a new case must pass, and contributing a case to the library.
+- [Adding a case](adding-a-case.md): naming, the checklist, the contract a new case must pass, and contributing a case to the library with `plantbench contribute`.
 - [API reference](api.md).
 
 ## Citation

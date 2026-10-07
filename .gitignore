@@ -32,3 +32,6 @@ docs/apidocs/
 
 # pixi environments
 .pixi/
+
+# The record `plantbench contribute` keeps of its edits, for --revert.
+.contribute/

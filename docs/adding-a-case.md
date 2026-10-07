@@ -55,23 +55,33 @@ A case is named for the process it models. The name is its id in `load_case`, th
 
 ## Contributing a case from its own package
 
-A case developed with `new-case` has the layout of a case in the library inside its package directory, so adding it is a move of that directory. First,
+A case developed with `new-case` has the layout of a case in the library inside its package directory, so adding it is a move of that directory, which `plantbench contribute` makes. [Contributing a case](tutorial/contributing.md) follows the procedure on an example from start to end. First,
 
 ```
 plantbench check <case> --contribute
 ```
 
-must pass. It runs the contract and the rules above that can be checked mechanically: imports from `core`, `units` and `heat` only, no other case, and no third-party import that an extra does not declare; a case card with every section; tests of the case's own. It then lists the rules that need a reviewer's judgment, which the pull request should answer. Then, in a fork of the library ([CONTRIBUTING.md](https://github.com/lbrice1/plantbench/blob/main/CONTRIBUTING.md)):
+must pass. It runs the contract and the rules above that can be checked mechanically: imports from `core`, `units` and `heat` only, no other case, and no third-party import that an extra does not declare; a case card with every section; tests of the case's own. It then lists the rules that need a reviewer's judgment, which the pull request should answer. Then, in a fork of the library ([CONTRIBUTING.md](https://github.com/lbrice1/plantbench/blob/main/CONTRIBUTING.md)), from an environment with the clone installed editable and the case's package installed:
 
-1. Move the package directory to `plantbench/cases/<case>/`, card included.
-2. Make imports between the case's own modules relative (`from .model import ...`), and imports of the library's layers absolute, as they are already.
-3. Add the case to `_MODULES` in `plantbench/cases/__init__.py`.
-4. Move the case's tests to `tests/cases/<case>/`, leaving out `test_contract.py`, which the library runs on every registered case.
-5. Move any extra of the package into the library's `pyproject.toml`, named for what it provides.
-6. Uninstall the package, so that its entry point no longer declares the id the library now holds.
-7. Add the case to the case tables of `README.md` and `docs/cases/index.md`, with a page under `docs/cases/`.
-8. If the case was presented in a publication of its own, give it in a Citation section of the case card (checklist item 10).
-9. Run `plantbench check <case> --contribute` again, and the verification below.
+```
+plantbench contribute <case> --dry-run       # the edits, written nowhere
+plantbench contribute <case> [--description TEXT] [--studies DIR]
+```
+
+and the steps it prints: uninstall the package, so that its entry point no longer declares the id the library now holds; let `ruff check --fix` order the rewritten imports; re-lock if an extra was added; update the lines of the card that name moved paths; then run `plantbench check <case> --contribute` again and the verification below. The edits are recorded in `.contribute/<case>.json`, which git ignores, and `plantbench contribute <case> --revert` removes them again.
+
+### What `contribute` does
+
+Nothing is written until the checks above pass and every place an edit goes has been found exactly once.
+
+1. Copies the package directory to `plantbench/cases/<case>/`, card included, and makes imports between the case's own modules relative (`from .model import ...`). Imports of the library's layers are absolute already.
+2. Copies the case's tests to `tests/cases/<case>/`, leaving out a file that holds only the contract, which the library runs on every registered case, and rewrites `from <case>` to `from plantbench.cases.<case>`.
+3. Adds the case to `_MODULES` in `plantbench/cases/__init__.py`.
+4. Declares the package's files other than Python and its card in `[tool.setuptools.package-data]`, and adds each extra of the package that the library lacks, under its name, to `[project.optional-dependencies]`. An extra the library has under the same name with other requirements is reported, not changed.
+5. Writes `docs/cases/<case>.md`, adds the case to the case tables of `README.md` and `docs/cases/index.md` with its number of states, read from the design, and its summary or `--description`, and to the toctree of `docs/cases/index.md`.
+6. With `--studies DIR`, copies the studies to `studies/<case>/` with the same rewrite as the tests.
+
+If the case was presented in a publication of its own, it gives that publication in a Citation section of the case card (checklist item 10) before it is contributed.
 
 ## Verification
 

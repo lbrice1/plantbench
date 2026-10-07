@@ -189,8 +189,12 @@ def _named(kind: str, d: str | None) -> str:
     return f"{'specification' if kind == SPEC_ID else 'protocol'} {identifier(kind, d)}"
 
 
-def case_source_text(source: dict) -> str:
-    """Where a case that is not built in came from, as a line of a results file."""
+def case_source_text(source: dict | None) -> str:
+    """Where a case came from, as a line of a results file.  `None`, which
+    `datagen.case_source` gives for a built-in case, reads as built in; the library's
+    commit on the stamp's own line covers it."""
+    if source is None:
+        return "case built into plantbench"
     package = (f" of {source['distribution']} {source['version']}"
                if "distribution" in source else "")
     return (f"case from {source['module']}{package} ({source['kind']}), at "

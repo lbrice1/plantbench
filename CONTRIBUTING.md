@@ -103,7 +103,7 @@ The hooks check whitespace, YAML and TOML, merge markers and file size, lint wit
 
 ## Adding a case
 
-Follow `docs/adding-a-case.md`. A new case passes the contract (`plantbench.contract`) without any change to `plantbench/core` that serves only that case. A case developed in its own package with `plantbench new-case` is added by the steps under "Contributing a case from its own package" there.
+Follow `docs/adding-a-case.md`. A new case passes the contract (`plantbench.contract`) without any change to `plantbench/core` that serves only that case. A case developed in its own package with `plantbench new-case` is added with `plantbench contribute`, as described under "Contributing a case from its own package" there and followed on an example in `docs/tutorial/contributing.md`.
 
 A case that was presented in a publication of its own gives that publication in a `## Citation` section of its case card: the reference as the first paragraph, then its BibTeX. `plantbench describe` prints it and dataset cards list it, and the citation section of `README.md` asks users to cite it beside the library's paper.
 
@@ -159,6 +159,8 @@ A proposed case is opened as an issue before the work starts, naming the process
 | `tests/units/`, `tests/heat/` | the unit models and pinch analysis |
 | `tests/cases/test_contract.py` | the contract of `plantbench.contract`, run on every case and the template, and the library rules on the built-in cases |
 | `tests/test_extending.py` | cases outside the library: entry points, the decorator, workers, provenance, `new-case`, `check` and the helpers |
+| `tests/test_contribute.py` | `plantbench contribute`: a case added to a copy of the files it edits, and removed again |
+| `tests/test_tutorial.py` | both tutorial pages as written, the contributing one in a temporary copy of the repository |
 | `tests/cases/<case>/` | each case's own verification, and `reactor_separator_recycle`'s golden tests |
 | `tests/test_architecture.py` | the direction of imports between layers |
 | `tests/test_datagen.py`, `tests/test_examples.py` | dataset generation, and the examples as written |
