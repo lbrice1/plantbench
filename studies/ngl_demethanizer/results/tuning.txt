@@ -1,0 +1,15 @@
+THE CLOSED-LOOP SPECTRA OF THE CONTROL STRUCTURES
+analyzed at 8728792 dirty with plantbench 0.2.1, Python 3.14.7, NumPy 2.5.3, SciPy 1.18.1, scikit-learn 1.9.1, pacmap 0.9.1, hdbscan 0.8.44
+
+scheme       basis       structure                   damping   rightmost  slowest, min     s
+conventional chebeir2019 basic                         0.550  -8.540e-02          11.7    22
+conventional chebeir2019 recovery cascade              0.470  -1.088e-02          91.9    15
+gsp          chebeir2019 basic                         0.557  -1.172e-01           8.5    22
+gsp          chebeir2019 recovery cascade              0.496  -6.594e-02          15.2    15
+gsp          chebeir2019 recovery cascade on ratio     0.440  -3.065e-02          32.6    15
+crr          chebeir2019 basic                         0.501  -1.177e-01           8.5    36
+crr          chebeir2019 recovery cascade              0.482  -6.417e-02          15.6    24
+crr          chebeir2019 recovery cascade on ratio     0.412  -3.263e-02          30.6    24
+crr          hysys       basic                         0.515  -1.160e-01           8.6    53
+crr          hysys       recovery cascade              0.475  -3.339e-02          29.9    35
+crr          hysys       recovery cascade on ratio     0.422  -1.578e-02          63.4    35

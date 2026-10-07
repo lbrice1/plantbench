@@ -21,7 +21,8 @@ dependencies = ["numpy>=2.0", "scipy>=1.15"]
 
 [project.optional-dependencies]
 # The reproduction tests run the scripts of studies/reactor_separator_recycle, which draw figures.
-dev = ["pytest>=8.0", "matplotlib>=3.9", "pre-commit>=3.5", "ruff>=0.6"]
+dev = ["pytest>=8.0", "matplotlib>=3.9", "pre-commit>=3.5", "ruff>=0.6",
+       "thermo>=0.4", "chemicals>=1.1"]
 # The studies: figures, and the knowledge-discovery pipeline of studies/regimes.  None
 # of it is needed by the library itself.
 # hdbscan 0.8.41 is the first to run against scikit-learn 1.8 and later.
@@ -77,6 +78,8 @@ include = ["plantbench*"]
 # reads a case's own.
 [tool.setuptools.package-data]
 "*" = ["README.md"]
+"plantbench.cases.ngl_demethanizer" = ["hysys_reference.json", "design_starts/*.json"]
+"plantbench.cases.ngl_deethanizer" = ["hysys_reference.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

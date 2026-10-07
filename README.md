@@ -29,6 +29,8 @@ plantbench generate examples/04_dataset.toml --workers 8
 |---|---|---|
 | `reactor_separator_recycle` | 134 (base plant) | A non-isothermal CSTR on the open-loop unstable branch of its multiplicity, in a recycle loop closed by a thirty-stage column with a purge; four heat-exchanger networks at three column pressures; four regulatory structures. Extends the reactor control example of Romagnoli and Palazoglu (2020); frozen. |
 | `jacketed_cstr` | 3 | The same reactor on its own, with three steady states and structures from open loop to a composition cascade. |
+| `ngl_demethanizer` | 299–406 (by scheme and basis) | The demethanizer section of a cryogenic NGL recovery plant in the conventional, gas subcooled and cold residue recycle schemes, a modified version of Chebeir, Salas and Romagnoli (2019); Peng–Robinson thermodynamics; regulatory structure and two recovery cascades. |
+| `ngl_deethanizer` | 354 | A 30-stage deethanizer with feed heater, total condenser and reboiler, constructed from an unpublished HYSYS case; Peng–Robinson thermodynamics; regulatory structure and a composition cascade. |
 
 Each case has a card in `plantbench/cases/<case>/README.md`. Cases are named for the process they model, following the convention in `docs/adding-a-case.md`.
 
@@ -132,7 +134,7 @@ The identifiers reported in the manuscript, `pb-spec:6a6fc673261b` for the enume
 | Path | Contents |
 |---|---|
 | `plantbench/core/` | control layer, instruments, disturbances, the case interface, specifications, helpers for writing a case |
-| `plantbench/units/` | unit-operation models: the CSTR, the tray column, vapor pressures |
+| `plantbench/units/` | unit-operation models: the CSTR, the tray column, vapor pressures, the Peng–Robinson equation of state, the staged column |
 | `plantbench/heat/` | process streams and pinch analysis |
 | `plantbench/cases/` | the cases, how they are found, and a template for new ones |
 | `plantbench/contract.py` | the contract every case keeps, and the rules for a case added to the library |

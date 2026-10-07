@@ -1,0 +1,61 @@
+THE CRR DESIGN ON THE HYSYS BASIS AGAINST THE HYSYS CASE
+analyzed at 8728792 dirty with plantbench 0.2.1, Python 3.14.7, NumPy 2.5.3, SciPy 1.18.1, scikit-learn 1.9.1, pacmap 0.9.1, hdbscan 0.8.44
+
+quantity                                       HYSYS       model  difference  unit
+E-100 hot outlet (4)                           -2.99     -3.0168     -0.0268  C
+residue gas leaving E-102 (3)                  -70.7     -70.526       0.174  C
+residue gas leaving E-100 (5)                 -10.21     -8.0671        2.14  C
+E-102 hot outlet (20)                         -64.43     -63.984       0.446  C
+E-104 hot outlet (24)                         -107.5     -107.16       0.345  C
+branch to stage 2 (22)                        -110.4     -110.49     -0.0926  C
+branch to stage 2, vapour fraction            0.7157      0.7131     -0.0026  -
+TE-100 outlet (17)                            -98.07     -97.953       0.117  C
+TE-100 outlet, vapour fraction                0.8939     0.89255    -0.00135  -
+booster discharge (6)                           1109      1096.1       -12.9  kPa
+booster discharge (6)                          17.24      18.672        1.43  C
+K-101 discharge (Sales Gas)                    188.9      189.56        0.66  C
+overhead (28)                                   6628      6621.4       -6.59  kmol/h
+residue gas (3)                                 4419      4414.3       -4.73  kmol/h
+recycle (26)                                    2209      2207.1       -1.86  kmol/h
+branch (18)                                     1966      1965.5       -0.51  kmol/h
+expander (17)                                   2849      2850.2        1.22  kmol/h
+TK-100 liquid (8)                              376.4      374.47       -1.93  kmol/h
+NGL                                            561.1       565.8         4.7  kmol/h
+NGL temperature                               -19.84     -19.545       0.295  C
+ethane in NGL                                0.69053     0.69296     0.00243  -
+ethane recovery                              0.82041      0.8296      0.0092  -
+chiller duty                                  3498.3      3461.9       -36.4  kW
+reboiler duty                                 1522.4      1533.8        11.5  kW
+TE-100 power                                  1154.7      1150.8       -3.85  kW
+K-101 power                                   8079.3      8276.9         198  kW
+K-102 power                                   25.014      28.848        3.83  kW
+stage 1                                         -107     -107.05     -0.0532  C
+stage 2                                       -106.4     -106.52      -0.118  C
+stage 3                                       -101.8     -101.79      0.0134  C
+stage 4                                       -99.47     -99.371      0.0988  C
+stage 5                                       -98.47     -98.339       0.131  C
+stage 6                                       -98.03     -97.886       0.144  C
+stage 7                                       -97.81     -97.669       0.141  C
+stage 8                                        -97.8     -97.671       0.129  C
+stage 9                                       -97.56     -97.442       0.118  C
+stage 10                                      -97.53     -97.399       0.131  C
+stage 11                                      -97.51     -97.377       0.133  C
+stage 12                                       -97.5     -97.375       0.125  C
+stage 13                                      -97.48     -97.356       0.124  C
+stage 14                                      -97.47     -97.354       0.116  C
+stage 15                                      -97.46     -97.333       0.127  C
+stage 16                                      -97.44     -97.313       0.127  C
+stage 17                                      -97.43     -97.312       0.118  C
+stage 18                                      -97.42     -97.291       0.129  C
+stage 19                                       -97.4     -97.271       0.129  C
+stage 20                                      -97.39     -97.269       0.121  C
+stage 21                                      -97.37     -97.247       0.123  C
+stage 22                                      -97.35     -97.221       0.129  C
+stage 23                                      -97.31      -97.19        0.12  C
+stage 24                                      -97.17     -97.039       0.131  C
+stage 25                                      -96.56     -96.454       0.106  C
+stage 26                                      -93.56      -93.44        0.12  C
+stage 27                                      -91.44     -91.303       0.137  C
+stage 28                                      -82.28     -82.108       0.172  C
+stage 29                                      -59.12     -58.881       0.239  C
+stage 30                                      -35.19     -34.984       0.206  C

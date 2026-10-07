@@ -1,0 +1,44 @@
+INDICATIVE CLOSED-LOOP RUNS, COMPOSITION CASCADE
+analyzed at 8728792 dirty with plantbench 0.2.1, Python 3.14.7, NumPy 2.5.3, SciPy 1.18.1, scikit-learn 1.9.1, pacmap 0.9.1, hdbscan 0.8.44
+
+feed flow +10 %: 252 s, 13394 evaluations
+                                  design  at 120 min   max |dev|
+  ethane in LPG                     0.02        0.02   0.0004395
+  stage 28 temperature            71.584      71.584      0.2681
+  stage 4 temperature              9.536      9.5359      0.8459
+  feed temperature                    33          33      0.2753
+  overhead pressure                 2453        2453       8.437
+  condenser level                     45          45      0.6422
+  reboiler level                      45          45      0.5689
+  ethane recovery                 0.9796      0.9796      0.1058
+  propane in distillate         0.018519    0.018519    0.002347
+  reflux flow                     371.44      408.59       44.14
+  reboiler duty                   2440.7      2684.8         265
+
+feed temperature +5 K: 436 s, 23793 evaluations
+                                  design  at 120 min   max |dev|
+  ethane in LPG                     0.02        0.02   0.0001061
+  stage 28 temperature            71.584      71.584     0.06291
+  stage 4 temperature              9.536       9.536      0.1249
+  feed temperature                    33          33      0.7392
+  overhead pressure                 2453        2453       1.947
+  condenser level                     45          45      0.1521
+  reboiler level                      45          45      0.1134
+  ethane recovery                 0.9796      0.9796     0.02955
+  propane in distillate         0.018519    0.018519   0.0001813
+  reflux flow                     371.44      371.44       2.211
+  reboiler duty                   2440.7      2440.7       33.07
+
+feed ethane +10 %: 295 s, 14054 evaluations
+                                  design  at 120 min   max |dev|
+  ethane in LPG                     0.02    0.019999    0.000469
+  stage 28 temperature            71.584      71.135      0.4491
+  stage 4 temperature              9.536      9.5359      0.6464
+  feed temperature                    33          33       1.066
+  overhead pressure                 2453        2453       9.091
+  condenser level                     45          45      0.6717
+  reboiler level                      45          45      0.4771
+  ethane recovery                 0.9796     0.98333     0.08905
+  propane in distillate         0.018519    0.019388    0.001665
+  reflux flow                     371.44       388.4        26.1
+  reboiler duty                   2440.7      2283.4         170

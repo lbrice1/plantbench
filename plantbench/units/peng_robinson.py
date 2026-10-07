@@ -77,14 +77,22 @@ class Components:
         cps = props.HeatCapacityGases
         H = np.array([[cp.T_dependent_property_integral(T_REF, t) for cp in cps] for t in T])
         Cp = np.array([[cp(t) for cp in cps] for t in T])
-        S = np.array([[cp.T_dependent_property_integral_over_T(T_REF, t) for cp in cps]
-                      for t in T])
-        comps = cls(names=tuple(names), CAS=tuple(consts.CASs), Tc=np.array(consts.Tcs),
-                    Pc=np.array(consts.Pcs), omega=np.array(consts.omegas), kij=kij,
-                    T_nodes=T, H_nodes=H, Cp_nodes=Cp, S_nodes=S, _thermo=(consts, props))
+        S = np.array([[cp.T_dependent_property_integral_over_T(T_REF, t) for cp in cps] for t in T])
+        comps = cls(
+            names=tuple(names),
+            CAS=tuple(consts.CASs),
+            Tc=np.array(consts.Tcs),
+            Pc=np.array(consts.Pcs),
+            omega=np.array(consts.omegas),
+            kij=kij,
+            T_nodes=T,
+            H_nodes=H,
+            Cp_nodes=Cp,
+            S_nodes=S,
+            _thermo=(consts, props),
+        )
         mid = T[:-1] + H_STEP / 2
-        exact = np.array([[cp.T_dependent_property_integral(T_REF, t) for cp in cps]
-                          for t in mid])
+        exact = np.array([[cp.T_dependent_property_integral(T_REF, t) for cp in cps] for t in mid])
         error = float(np.max(np.abs(comps.h_ideal_pure(mid) - exact)))
         object.__setattr__(comps, "h_table_error", error)
         return comps
@@ -92,15 +100,21 @@ class Components:
     def _hermite(self, T, values, slopes):
         T = np.asarray(T, dtype=float)
         if np.any(T < self.T_nodes[0]) or np.any(T > self.T_nodes[-1]):
-            raise ValueError(f"temperature outside the enthalpy table, "
-                             f"{self.T_nodes[0]:g} to {self.T_nodes[-1]:g} K")
+            raise ValueError(
+                f"temperature outside the enthalpy table, "
+                f"{self.T_nodes[0]:g} to {self.T_nodes[-1]:g} K"
+            )
         i = np.clip(np.searchsorted(self.T_nodes, T) - 1, 0, len(self.T_nodes) - 2)
         h = self.T_nodes[i + 1] - self.T_nodes[i]
         s = ((T - self.T_nodes[i]) / h)[:, None]
         h00, h10 = 2 * s**3 - 3 * s**2 + 1, s**3 - 2 * s**2 + s
         h01, h11 = -2 * s**3 + 3 * s**2, s**3 - s**2
-        return (h00 * values[i] + h10 * h[:, None] * slopes[i]
-                + h01 * values[i + 1] + h11 * h[:, None] * slopes[i + 1])
+        return (
+            h00 * values[i]
+            + h10 * h[:, None] * slopes[i]
+            + h01 * values[i + 1]
+            + h11 * h[:, None] * slopes[i + 1]
+        )
 
     def h_ideal_pure(self, T) -> np.ndarray:
         """Ideal-gas enthalpy of each pure component relative to T_REF, (N, n_c), J/mol."""
@@ -115,11 +129,15 @@ class Components:
         from thermo import PRMIX, CEOSGas, CEOSLiquid, FlashVL
 
         consts, props = self._thermo
-        kw = dict(Tcs=list(self.Tc), Pcs=list(self.Pc), omegas=list(self.omega),
-                  kijs=self.kij.tolist())
-        return FlashVL(consts, props,
-                       liquid=CEOSLiquid(PRMIX, kw, HeatCapacityGases=props.HeatCapacityGases),
-                       gas=CEOSGas(PRMIX, kw, HeatCapacityGases=props.HeatCapacityGases))
+        kw = dict(
+            Tcs=list(self.Tc), Pcs=list(self.Pc), omegas=list(self.omega), kijs=self.kij.tolist()
+        )
+        return FlashVL(
+            consts,
+            props,
+            liquid=CEOSLiquid(PRMIX, kw, HeatCapacityGases=props.HeatCapacityGases),
+            gas=CEOSGas(PRMIX, kw, HeatCapacityGases=props.HeatCapacityGases),
+        )
 
 
 class PengRobinson:
@@ -170,8 +188,7 @@ class PengRobinson:
         comp[:, 0, :] = np.stack([-c2, -c1, -c0], axis=1)
         comp[:, 1, 0] = comp[:, 2, 1] = 1.0
         roots = np.linalg.eigvals(comp)
-        real = np.where((np.abs(roots.imag) < 1e-9) & (roots.real > B[:, None]),
-                        roots.real, np.nan)
+        real = np.where((np.abs(roots.imag) < 1e-9) & (roots.real > B[:, None]), roots.real, np.nan)
         Z = np.nanmin(real, axis=1) if phase == "liquid" else np.nanmax(real, axis=1)
         # Polish on the cubic itself: the eigenvalues carry round-off that finite-
         # difference Jacobians of the right-hand side would see as noise.
@@ -194,9 +211,11 @@ class PengRobinson:
         """Log fugacity coefficients, (N, n_c)."""
         a, _, b, sum_j, A, B, Z, L = self._state(T, P, x, phase)
         bi_b = self.b_i / b[:, None]
-        return (bi_b * (Z - 1.0)[:, None] - np.log(Z - B)[:, None]
-                - (A / (2.0 * SQRT2 * B))[:, None] * (2.0 * sum_j / a[:, None] - bi_b)
-                * L[:, None])
+        return (
+            bi_b * (Z - 1.0)[:, None]
+            - np.log(Z - B)[:, None]
+            - (A / (2.0 * SQRT2 * B))[:, None] * (2.0 * sum_j / a[:, None] - bi_b) * L[:, None]
+        )
 
     def h_ideal(self, T, x):
         """Ideal-gas enthalpy relative to the ideal gas at T_REF, J/mol, (N,)."""
@@ -214,8 +233,11 @@ class PengRobinson:
         """Ideal-gas entropy of the mixture relative to the pure ideal gases at T_REF and
         P_REF, mixing included, J/(mol K), (N,)."""
         xs = np.where(x > 0, x, 1.0)
-        return (np.einsum("ni,ni->n", x, self.c.s_ideal_pure(T)) - R * np.log(P / P_REF)
-                - R * np.einsum("ni,ni->n", x, np.log(xs)))
+        return (
+            np.einsum("ni,ni->n", x, self.c.s_ideal_pure(T))
+            - R * np.log(P / P_REF)
+            - R * np.einsum("ni,ni->n", x, np.log(xs))
+        )
 
     def s_departure(self, T, P, x, phase: str):
         a, da, b, _, _, B, Z, L = self._state(T, P, x, phase)
@@ -231,7 +253,8 @@ class PengRobinson:
 
     def wilson_K(self, T, P):
         return (self.c.Pc / P[:, None]) * np.exp(
-            5.373 * (1.0 + self.c.omega) * (1.0 - self.c.Tc / T[:, None]))
+            5.373 * (1.0 + self.c.omega) * (1.0 - self.c.Tc / T[:, None])
+        )
 
     # -- bubble point ----------------------------------------------------------------
 
@@ -390,9 +413,12 @@ class PengRobinson:
         K = None if K0 is None else np.asarray(K0, dtype=float)
         dT = 1e-4
         for _ in range(max_iter):
-            both = self.flash_PT(np.concatenate([T, T + dT]), np.concatenate([P, P]),
-                                 np.concatenate([z, z]),
-                                 K0=None if K is None else np.concatenate([K, K]))
+            both = self.flash_PT(
+                np.concatenate([T, T + dT]),
+                np.concatenate([P, P]),
+                np.concatenate([z, z]),
+                K0=None if K is None else np.concatenate([K, K]),
+            )
             f0, f1 = getattr(both, target)[:n], getattr(both, target)[n:]
             r = f0 - value
             lo = np.where(r < 0, T, lo)
@@ -400,15 +426,17 @@ class PengRobinson:
             new = T - np.clip(r / ((f1 - f0) / dT), -30.0, 30.0)
             bracketed = np.isfinite(lo) & np.isfinite(hi)
             outside = bracketed & ((new <= lo) | (new >= hi))
-            new = np.where(outside, 0.5 * (lo + hi), new)
+            mid = 0.5 * (np.where(bracketed, lo, 0.0) + np.where(bracketed, hi, 0.0))
+            new = np.where(outside, mid, new)
             new = np.maximum(new, self.c.T_nodes[0] + 1.0)
             step = new - T
             T = new
             K = both.K[:n]
             if np.all(np.abs(step) < tol * T):
                 return self.flash_PT(T, P, z, K0=K)
-        raise RuntimeError(f"P{target.upper()} flash did not converge: "
-                           f"step {np.max(np.abs(step)):.3g} K")
+        raise RuntimeError(
+            f"P{target.upper()} flash did not converge: step {np.max(np.abs(step)):.3g} K"
+        )
 
     def flash_PH(self, P, h, z, T0, K0=None, tol: float = 1e-11, max_iter: int = 60):
         """Flash at pressure and molar enthalpy: a valve, or a stream given a duty."""
