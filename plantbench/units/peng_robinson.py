@@ -572,7 +572,10 @@ def _rachford_rice(z, K, beta0, tol: float = 1e-14, max_iter: int = 100):
         lo = xp.where(f > 0, b, lo)
         hi = xp.where(f < 0, b, hi)
         new = b - f / df
-        new = xp.where((new <= lo) | (new >= hi), 0.5 * (lo + hi), new)
+        # Bisect only where Newton leaves the bracket.  A converged row's step is zero and
+        # lands on the bracket's end, which a test with <= would take for leaving it,
+        # sending the row to bisect the bracket down to the tolerance.
+        new = xp.where((new < lo) | (new > hi), 0.5 * (lo + hi), new)
         done = xp.abs(new - b) <= tol * (1.0 + xp.abs(b))
         b = new
         if xp.all(done):
