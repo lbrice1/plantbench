@@ -32,6 +32,7 @@ from typing import Sequence
 import numpy as np
 
 from plantbench.backend import namespace, to_device
+from plantbench.units import _kernels
 
 R = 8.314462618  # J/(mol K)
 T_REF = 298.15  # K, ideal-gas enthalpy and entropy reference
@@ -162,7 +163,9 @@ class PengRobinson:
     the same two Newton steps and agree to round-off.  "eigen" is the default and what
     the published results were produced with.  "closed" costs the same on the few rows of
     one column and about 2.4 times less per row on the thousands of rows of a batch, and
-    it is the one a GPU can run; `on` chooses it.
+    it is the one a GPU can run; `on` chooses it.  On a GPU, with "closed", the state of
+    a phase, its fugacities and the Rachford–Rice solve each run as one CUDA kernel
+    (`_kernels`), which agree with the NumPy code to round-off.
     """
 
     def __init__(self, comps: Components, roots: str = "eigen"):
@@ -176,6 +179,8 @@ class PengRobinson:
         w = comps.omega
         self.m_i = 0.37464 + 1.54226 * w - 0.26992 * w**2
         self.one_minus_k = 1.0 - comps.kij
+        # On a GPU the state of a phase and its fugacities are each one kernel launch.
+        self._use_kernels = roots == "closed" and _kernels.applies(self.xp)
 
     def on(self, device: str, roots: str = "closed") -> PengRobinson:
         """The same equation with its constants on `device`, for the batched path."""
@@ -207,9 +212,10 @@ class PengRobinson:
 
     # -- the cubic -------------------------------------------------------------------
 
-    def _Z(self, A, B, phase: str):
+    def _Z(self, A, B, phase):
         """The compressibility root of the phase: the smallest real root above B for a
-        liquid, the largest for a vapour.  Where one real root exists it serves both."""
+        liquid, the largest for a vapour.  Where one real root exists it serves both.
+        `phase` is "liquid", "vapour", or a boolean array true on the liquid rows."""
         xp = self.xp
         c2 = -(1.0 - B)
         c1 = A - 3.0 * B**2 - 2.0 * B
@@ -225,7 +231,10 @@ class PengRobinson:
         else:
             real = _cubic_real_roots(c2, c1, c0)
             real = xp.where(real > B[:, None], real, xp.nan)
-        Z = xp.nanmin(real, axis=1) if phase == "liquid" else xp.nanmax(real, axis=1)
+        if isinstance(phase, str):
+            Z = xp.nanmin(real, axis=1) if phase == "liquid" else xp.nanmax(real, axis=1)
+        else:
+            Z = xp.where(phase, xp.nanmin(real, axis=1), xp.nanmax(real, axis=1))
         # Polish on the cubic itself: the eigenvalues carry round-off that finite-
         # difference Jacobians of the right-hand side would see as noise.
         for _ in range(2):
@@ -234,6 +243,8 @@ class PengRobinson:
         return Z
 
     def _state(self, T, P, x, phase):
+        if self._use_kernels:
+            return _kernels.state(self, T, P, x, phase)
         xp = self.xp
         a, da, b, sum_j = self._mixture(T, x)
         A = a * P / (R * T) ** 2
@@ -242,12 +253,43 @@ class PengRobinson:
         L = xp.log((Z + (1.0 + SQRT2) * B) / (Z + (1.0 - SQRT2) * B))
         return a, da, b, sum_j, A, B, Z, L
 
+    def _stack(self, T, P, x, y):
+        """Liquid x and vapour y at the same T and P as one stack of 2N rows, liquid
+        first, with the phase of each row.  Every row's arithmetic is the one it has on
+        its own; the stack halves the number of array operations, which is what one
+        evaluation on a GPU costs."""
+        xp = self.xp
+        n = len(T)
+        return (xp.concatenate([T, T]), xp.concatenate([P, P]), xp.concatenate([x, y]),
+                xp.arange(2 * n) < n)
+
+    def _stacks(self, T) -> bool:
+        """Whether liquid and vapour are evaluated as one stack.  A single row is not, on
+        the host: BLAS forms x @ b_i for one row by a dot product and for two by a
+        matrix-vector product, which differ in the last bit, and a serial evaluation is
+        to stay as it was."""
+        return len(T) > 1 or self._use_kernels
+
     # -- properties ------------------------------------------------------------------
 
-    def ln_phi(self, T, P, x, phase: str):
-        """Log fugacity coefficients, (N, n_c)."""
+    def ln_phi(self, T, P, x, phase):
+        """Log fugacity coefficients, (N, n_c).  `phase` is "liquid", "vapour", or a
+        boolean array true on the liquid rows."""
+        if self._use_kernels:
+            return _kernels.ln_phi(self, T, P, x, phase)
+        return self._ln_phi(self._state(T, P, x, phase))
+
+    def _ln_phi_pair(self, T, P, x, y):
+        """Log fugacity coefficients of liquid x and of vapour y at the same T and P."""
+        if not self._stacks(T):
+            return self.ln_phi(T, P, x, "liquid"), self.ln_phi(T, P, y, "vapour")
+        n = len(T)
+        ln_phi = self.ln_phi(*self._stack(T, P, x, y))
+        return ln_phi[:n], ln_phi[n:]
+
+    def _ln_phi(self, state):
         xp = self.xp
-        a, _, b, sum_j, A, B, Z, L = self._state(T, P, x, phase)
+        a, _, b, sum_j, A, B, Z, L = state
         bi_b = self.b_i / b[:, None]
         return (
             bi_b * (Z - 1.0)[:, None]
@@ -261,7 +303,10 @@ class PengRobinson:
         return xp.einsum("ni,ni->n", x, self.c.h_ideal_pure(T))
 
     def h_departure(self, T, P, x, phase: str):
-        a, da, b, _, _, B, Z, L = self._state(T, P, x, phase)
+        return self._h_departure(T, self._state(T, P, x, phase))
+
+    def _h_departure(self, T, state):
+        a, da, b, _, _, B, Z, L = state
         return R * T * (Z - 1.0) + (T * da - a) / (2.0 * SQRT2 * b) * L
 
     def h(self, T, P, x, phase: str):
@@ -280,8 +325,11 @@ class PengRobinson:
         )
 
     def s_departure(self, T, P, x, phase: str):
+        return self._s_departure(self._state(T, P, x, phase))
+
+    def _s_departure(self, state):
         xp = self.xp
-        a, da, b, _, _, B, Z, L = self._state(T, P, x, phase)
+        a, da, b, _, _, B, Z, L = state
         return R * xp.log(Z - B) + da / (2.0 * SQRT2 * b) * L
 
     def s(self, T, P, x, phase: str):
@@ -291,7 +339,8 @@ class PengRobinson:
     def K(self, T, P, x, y):
         """Equilibrium ratios for liquid x and vapour y, (N, n_c)."""
         xp = self.xp
-        return xp.exp(self.ln_phi(T, P, x, "liquid") - self.ln_phi(T, P, y, "vapour"))
+        ln_phi_L, ln_phi_V = self._ln_phi_pair(T, P, x, y)
+        return xp.exp(ln_phi_L - ln_phi_V)
 
     def wilson_K(self, T, P):
         xp = self.xp
@@ -411,7 +460,8 @@ class PengRobinson:
         """One step of successive substitution: ln K from the phases ln K gives."""
         xp = self.xp
         x, y = _phases(z, xp.exp(lnK), beta)
-        return self.ln_phi(T, P, x, "liquid") - self.ln_phi(T, P, y, "vapour")
+        ln_phi_L, ln_phi_V = self._ln_phi_pair(T, P, x, y)
+        return ln_phi_L - ln_phi_V
 
     def _newton(self, T, P, z, lnK, beta, tol, max_iter: int = 8):
         """Newton on g(ln K) = ln K - substitute(ln K) = 0, its Jacobian by forward
@@ -458,15 +508,26 @@ class PengRobinson:
         V = xp.where(liquid, 0.0, xp.where(vapour, 1.0, beta))
         x = xp.where(liquid[:, None], z, x)
         y = xp.where(vapour[:, None], z, y)
-        h = (1 - V) * self.h(T, P, x, "liquid") + V * self.h(T, P, y, "vapour")
-        s = (1 - V) * self.s(T, P, x, "liquid") + V * self.s(T, P, y, "vapour")
+        if not self._stacks(T):
+            h = (1 - V) * self.h(T, P, x, "liquid") + V * self.h(T, P, y, "vapour")
+            s = (1 - V) * self.s(T, P, x, "liquid") + V * self.s(T, P, y, "vapour")
+            return Flash(T=T, P=P, V=V, x=x, y=y, K=K, h=h, s=s)
+        # The h and s of each phase, as `h` and `s` give them, from one stacked state.
+        n = len(T)
+        T2, P2, X, phase = self._stack(T, P, x, y)
+        state = self._state(T2, P2, X, phase)
+        h2 = self.h_ideal(T2, X) + self._h_departure(T2, state)
+        s2 = self.s_ideal(T2, P2, X) + self._s_departure(state)
+        h = (1 - V) * h2[:n] + V * h2[n:]
+        s = (1 - V) * s2[:n] + V * s2[n:]
         return Flash(T=T, P=P, V=V, x=x, y=y, K=K, h=h, s=s)
 
     def _liquid_like(self, T, P, z):
         """Where one phase: whether the liquid root has the lower Gibbs energy."""
         xp = self.xp
-        gL = xp.einsum("ni,ni->n", z, self.ln_phi(T, P, z, "liquid"))
-        gV = xp.einsum("ni,ni->n", z, self.ln_phi(T, P, z, "vapour"))
+        ln_phi_L, ln_phi_V = self._ln_phi_pair(T, P, z, z)
+        gL = xp.einsum("ni,ni->n", z, ln_phi_L)
+        gV = xp.einsum("ni,ni->n", z, ln_phi_V)
         return gL < gV - 1e-12
 
     def _flash_P(self, P, z, target, value, T0, K0, tol, max_iter):
@@ -555,6 +616,8 @@ def _rachford_rice(z, K, beta0, tol: float = 1e-14, max_iter: int = 100):
     for the negative flash.  A row whose K are all above 1 has no root and is all vapour
     (returned as 2); all below 1, all liquid (returned as -1)."""
     xp = namespace(z)
+    if _kernels.applies(xp):
+        return _kernels.rachford_rice(z, K, beta0, tol, max_iter)
     Km1 = K - 1.0
     Kmax, Kmin = K.max(axis=1), K.min(axis=1)
     beta = xp.where(Kmax <= 1.0, -1.0, xp.where(Kmin >= 1.0, 2.0, xp.asarray(beta0, float)))
