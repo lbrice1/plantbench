@@ -12,12 +12,13 @@ equally well.  They know nothing about any plant.
 
 from __future__ import annotations
 
+import dataclasses
 from functools import lru_cache
 from typing import Callable, Sequence
 
 import numpy as np
 
-from plantbench.backend import namespace
+from plantbench.backend import namespace, to_host
 
 
 class StateLayout:
@@ -110,6 +111,20 @@ def measured(v):
     A measure written with `x[..., k]` and `u.field[..., k]` serves one state and a batch
     alike; ending it in `measured(...)` rather than `float(...)` keeps it so."""
     return float(v) if np.ndim(v) == 0 else v
+
+
+def inputs_key(u) -> tuple:
+    """The values of an inputs dataclass as a hashable key, for a model that caches an
+    evaluation on its inputs: a control structure writes its loops' outputs into one
+    inputs object in turn, so the object itself is not a key."""
+    return tuple(to_host(np.asarray(0.0) if v is None else v).astype(float).tobytes()
+                 for v in (getattr(u, f.name) for f in dataclasses.fields(u)))
+
+
+def same_values(a, b) -> bool:
+    """Whether two arrays, each one state or a batch, on the host or the device, are equal."""
+    xp = namespace(a)
+    return xp is namespace(b) and a.shape == b.shape and bool(xp.array_equal(a, b))
 
 
 def state_measurement(state: int | str, layout: StateLayout | None = None) -> Callable:

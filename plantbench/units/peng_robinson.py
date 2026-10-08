@@ -571,9 +571,9 @@ def _cubic_real_roots(c2, c1, c0):
     disc = (q / 2.0) ** 2 + (p / 3.0) ** 3
     sq = xp.sqrt(xp.maximum(disc, 0.0))
     one = xp.cbrt(-q / 2.0 + sq) + xp.cbrt(-q / 2.0 - sq) - shift
-    # Three real roots need p < 0; elsewhere the value is discarded, and the bound only
-    # keeps the arithmetic finite.
-    pn = xp.minimum(p, -1e-300)
+    # Three real roots need p < 0.  Where p >= 0 the value is discarded, and p = -1 stands
+    # in so that the arithmetic stays finite; a bound near zero would underflow pn * r.
+    pn = xp.where(p < 0.0, p, -1.0)
     r = 2.0 * xp.sqrt(-pn / 3.0)
     theta = xp.arccos(xp.clip(3.0 * q / (pn * r), -1.0, 1.0)) / 3.0
     k = 2.0 * np.pi / 3.0 * xp.arange(3)

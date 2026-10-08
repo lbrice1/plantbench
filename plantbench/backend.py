@@ -12,6 +12,8 @@ single precision cannot meet, so a device without fast double precision gains li
 
 from __future__ import annotations
 
+import functools
+import sys
 from types import ModuleType
 
 import numpy as np
@@ -19,6 +21,7 @@ import numpy as np
 DEVICES = ("cpu", "cuda")
 
 
+@functools.cache
 def _cupy() -> ModuleType | None:
     try:
         import cupy
@@ -57,9 +60,15 @@ def module(device: str) -> ModuleType:
     return cp
 
 
+def _loaded_cupy() -> ModuleType | None:
+    # A CuPy array can exist only once CuPy has been imported, so the test for one need
+    # not import it.  `namespace` runs many times per right-hand side.
+    return sys.modules.get("cupy")
+
+
 def namespace(*arrays) -> ModuleType:
     """The array module of the arrays given: CuPy if any of them is a CuPy array."""
-    cp = _cupy()
+    cp = _loaded_cupy()
     if cp is not None and any(isinstance(a, cp.ndarray) for a in arrays):
         return cp
     return np
@@ -72,7 +81,7 @@ def to_device(x, device: str):
 
 def to_host(x) -> np.ndarray:
     """`x` as a NumPy array, copied from the device if it is there."""
-    cp = _cupy()
+    cp = _loaded_cupy()
     if cp is not None and isinstance(x, cp.ndarray):
         return cp.asnumpy(x)
     return np.asarray(x)
