@@ -93,3 +93,59 @@ def test_the_enthalpy_table_is_exact_to_a_millijoule(comps):
 def test_a_temperature_outside_the_table_is_refused(pr):
     with pytest.raises(ValueError, match="outside the enthalpy table"):
         pr.h(np.array([30.0]), np.array([1e5]), np.array([_x("feed")]), "vapour")
+
+
+def _two_phase_feed(pr):
+    """The feed flashed where it is two-phase, and the flash's own result there."""
+    T = C + np.repeat([-45.0, -60.0, -75.0, -90.0], 4)
+    P = np.tile([1000e3, 2000e3, 3000e3, 4672e3], 4)
+    z = np.tile(_x("feed"), (len(T), 1))
+    f = pr.flash_PT(T, P, z)
+    two = (f.V > 0.0) & (f.V < 1.0)
+    return T[two], P[two], z[two], f
+
+
+def test_a_row_newton_does_not_settle_is_finished_by_substitution(pr, monkeypatch):
+    """With one Newton step, too few to converge, the rows it leaves unsettled go back to
+    substitution, and the flash reaches the same answer."""
+    T, P, z, _ = _two_phase_feed(pr)
+    ref = pr.flash_PT(T, P, z)
+    unsettled = []
+    newton = PengRobinson._newton
+
+    def one_step(self, *args):
+        out = newton(self, *args, max_iter=1)
+        unsettled.append(int((~out[2]).sum()))
+        return out
+
+    monkeypatch.setattr(PengRobinson, "_newton", one_step)
+    f = pr.flash_PT(T, P, z)
+    assert sum(unsettled) > 0
+    assert np.allclose(f.V, ref.V, rtol=0, atol=1e-10)
+    assert np.allclose(f.x, ref.x, rtol=0, atol=1e-10)
+    assert np.allclose(f.y, ref.y, rtol=0, atol=1e-10)
+
+
+def test_newton_holds_a_diverged_row_and_leaves_the_others(pr, monkeypatch):
+    """A row driven out of the bound on ln K is held and reported unsettled, and the rows
+    beside it get what they would alone, to round-off: the held row keeps the batch
+    iterating, and they take further steps of the order of round-off.  The divergence is made by shifting the
+    substitution of one row, marked by its temperature, by 1000 in ln K."""
+    T, P, z, f = _two_phase_feed(pr)
+    lnK = np.log(f.K[(f.V > 0.0) & (f.V < 1.0)]) * (1.0 + 1e-4)
+    beta = np.full(len(T), 0.5)
+    alone = pr._newton(T, P, z, lnK, beta, 1e-12)
+    marker = T[0] + 1e-9
+    substitute = PengRobinson._substitute
+
+    def shifted(self, T, P, z, lnK, beta):
+        return substitute(self, T, P, z, lnK, beta) + 1000.0 * (T == marker)[:, None]
+
+    monkeypatch.setattr(PengRobinson, "_substitute", shifted)
+    out = pr._newton(np.append(T, marker), np.append(P, P[0]), np.vstack([z, z[0]]),
+                     np.vstack([lnK, lnK[0]]), np.append(beta, 0.5), 1e-12)
+    assert alone[2].all()
+    assert not out[2][-1]
+    assert np.array_equal(out[0][-1], lnK[0])
+    assert np.allclose(out[0][:-1], alone[0], rtol=0, atol=1e-12)
+    assert np.array_equal(out[2][:-1], alone[2])

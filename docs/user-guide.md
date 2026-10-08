@@ -123,6 +123,8 @@ and from the command line, `plantbench run ngl_deethanizer --jacobian batched` a
 
 On the host, a 20-minute run of `ngl_deethanizer` with a step in the feed's ethane takes 10 s with the batched Jacobian against 59 s with LSODA's own, and its states differ by at most 5e-12 relative; `benchmarks/jacobian.py` measures this for each case and device, and `benchmarks/scaling.py` the time of one batched evaluation against the size of the batch. `ngl_deethanizer` and `ngl_demethanizer` declare a batched right-hand side; `reactor_separator_recycle` and `jacketed_cstr` do not.
 
+On a node with one NVIDIA A100, the same run takes 157 s with LSODA's own Jacobian, 27 s with the batched Jacobian on the host and 20 s with it on the GPU. The GPU gains little on one run: between Jacobians, LSODA advances the solution one state at a time on the host, and one Jacobian of `ngl_deethanizer`, 361 states, is too small a batch to occupy the device, which a job of single runs kept busy 1 % of the time. A single run with the batched Jacobian therefore belongs on a CPU node. The device pays when a batch holds many Jacobians: 64 of them, 23,104 states, take 0.55 s against 0.24 s for one, 24 µs a state against 1.5 ms on the host.
+
 `device="cuda"` needs an NVIDIA GPU with fast double precision (A100, H100) and CuPy: `pip install 'plantbench[gpu]'` with a CUDA 12 toolkit on the machine, or the pixi environment `cuda` (linux-64), which takes CuPy and the CUDA runtime from conda-forge and needs only the driver. Everything is evaluated in double precision, since the integrations run at a relative tolerance of 1e-8.
 
 ## Generating a dataset

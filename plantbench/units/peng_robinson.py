@@ -359,8 +359,8 @@ class PengRobinson:
         Michelsen, 1989), so that a row converging to a fraction outside (0, 1) is single
         phase: liquid below 0, vapour above 1.  A single-phase row stops once its phase is
         settled, since its properties do not depend on K; a two-phase row is finished by
-        Newton on ln K once substitution has brought it close.  Starts from Wilson's K or
-        from `K0`.
+        Newton on ln K once substitution has brought it close, and continues by
+        substitution if Newton does not settle it.  Starts from Wilson's K or from `K0`.
 
         Returns the `Flash` of each row: vapour fraction clipped to [0, 1], phase
         compositions, K-values and the molar enthalpy and entropy of the whole.
@@ -372,6 +372,7 @@ class PengRobinson:
         lnK = xp.log(self.wilson_K(T, P) if K0 is None else xp.array(K0, dtype=float))
         beta = xp.full(len(T), 0.5)
         active = xp.ones(len(T), dtype=bool)
+        no_newton = xp.zeros(len(T), dtype=bool)
         for _ in range(max_iter):
             idx = xp.flatnonzero(active)
             beta[idx] = _rachford_rice(z[idx], xp.exp(lnK[idx]), beta[idx])
@@ -381,14 +382,23 @@ class PengRobinson:
             b = beta[idx]
             # Far outside [0, 1] the phase is settled.  Near [0, 1], substitution slows as
             # a phase boundary approaches, so Newton finishes the row, the negative flash
-            # telling afterwards whether it is one phase or two.
-            one_phase = (b < -0.01) | (b > 1.01)
+            # telling afterwards whether it is one phase or two.  On a row Newton could
+            # not settle, which happens beside a phase boundary, the negative flash decides
+            # at once: substitution there can stall at round-off without converging.
+            one_phase = ((b < -0.01) | (b > 1.01)
+                         | (no_newton[idx] & ((b <= 0.0) | (b >= 1.0))))
             trivial = xp.max(xp.abs(new), axis=1) < 1e-4
-            close = ~one_phase & ~trivial & (change < 1e-3)
+            close = ~one_phase & ~trivial & (change < 1e-3) & ~no_newton[idx]
+            settled = xp.zeros(len(idx), dtype=bool)
             if xp.any(close):
                 c = idx[close]
-                lnK[c], beta[c] = self._newton(T[c], P[c], z[c], lnK[c], beta[c], tol)
-            active[idx[one_phase | trivial | close | (change < tol)]] = False
+                lnK_c, beta_c, ok = self._newton(T[c], P[c], z[c], lnK[c], beta[c], tol)
+                # A row Newton did not settle goes on by substitution from where it was.
+                lnK[c] = xp.where(ok[:, None], lnK_c, lnK[c])
+                beta[c] = xp.where(ok, beta_c, beta[c])
+                no_newton[c] = ~ok
+                settled[close] = ok
+            active[idx[one_phase | trivial | settled | (change < tol)]] = False
             if not active.any():
                 break
         else:
@@ -405,10 +415,17 @@ class PengRobinson:
 
     def _newton(self, T, P, z, lnK, beta, tol, max_iter: int = 8):
         """Newton on g(ln K) = ln K - substitute(ln K) = 0, its Jacobian by forward
-        differences evaluated as extra rows of one batch."""
+        differences evaluated as extra rows of one batch.
+
+        Returns ln K, the vapour fraction, and the rows it settled: those whose last step
+        was below 1e-6, after which Newton, its Jacobian accurate to about 1e-7, leaves an
+        error of order 1e-12, and those ending one phase (a vapour fraction outside (0, 1)), whose
+        properties do not depend on K.  A row whose ln K leaves `_LNK_BOUND` has diverged;
+        it is held where it was and not settled."""
         xp = self.xp
         n, nc = lnK.shape
         eps = 1e-7
+        held = xp.zeros(n, dtype=bool)
         for _ in range(max_iter):
             rows = xp.concatenate([lnK[None], lnK[None] + eps * xp.eye(nc)[:, None, :]])
             rows = rows.reshape(-1, nc)  # (nc + 1) blocks of n rows
@@ -419,11 +436,15 @@ class PengRobinson:
             g = (rows - self._substitute(rep(T), rep(P), zb, rows, bb)).reshape(nc + 1, n, nc)
             J = xp.transpose((g[1:] - g[0]) / eps, (1, 2, 0))  # (n, nc, nc): dg_i/dlnK_j
             step = xp.linalg.solve(J, -g[0][:, :, None])[:, :, 0]
-            lnK = lnK + step
+            new = lnK + step
+            held = held | ~xp.all(xp.abs(new) < _LNK_BOUND, axis=1)  # NaN included
+            lnK = xp.where(held[:, None], lnK, new)
             beta = bb[:n]
             if xp.max(xp.abs(step)) < tol:
                 break
-        return lnK, _rachford_rice(z, xp.exp(lnK), beta)
+        beta = _rachford_rice(z, xp.exp(lnK), beta)
+        last = xp.max(xp.abs(step), axis=1)
+        return lnK, beta, ~held & ((last < 1e-6) | (beta <= 0.0) | (beta >= 1.0))
 
     def _result(self, T, P, z, K, beta) -> Flash:
         xp = self.xp
@@ -514,6 +535,11 @@ class Flash:
     K: np.ndarray
     h: np.ndarray
     s: np.ndarray
+
+
+# Where Newton's ln K leaves (-_LNK_BOUND, _LNK_BOUND) the row has diverged: no physical
+# K-value comes near the bound, and inside it exp(ln K) and its square stay finite.
+_LNK_BOUND = 100.0
 
 
 def _phases(z, K, beta):
