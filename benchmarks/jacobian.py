@@ -23,12 +23,17 @@ CASES = ("ngl_deethanizer", "ngl_demethanizer")
 
 
 def _jacobian_time(setup, device: str, repeats: int = 3) -> float:
+    """The mean time of one Jacobian, each at a fresh state: the plant holds the result of
+    its last call at the same states (`Plant.temperatures`), which a repeat would hit."""
     d, S = setup.design, setup.structure
-    y0 = backend.to_device(np.concatenate([d.x, ctl.initial_augmented(S, d)]), device)
+    y = np.concatenate([d.x, ctl.initial_augmented(S, d)])
+    rng = np.random.default_rng(0)
+    states = [backend.to_device(y * (1.0 + 1e-6 * rng.standard_normal(len(y))), device)
+              for _ in range(repeats + 1)]
     args = (S, d.u, d.pp, None, d.rhs)
-    backend.to_host(ctl.jacobian_batched(0.0, y0, *args))  # warm-up: caches, kernels
+    backend.to_host(ctl.jacobian_batched(0.0, states[0], *args))  # warm-up: caches, kernels
     start = time.perf_counter()
-    for _ in range(repeats):
+    for y0 in states[1:]:
         backend.to_host(ctl.jacobian_batched(0.0, y0, *args))
     return (time.perf_counter() - start) / repeats
 

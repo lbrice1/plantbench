@@ -71,8 +71,8 @@ from typing import ClassVar
 
 import numpy as np
 
-from plantbench.backend import namespace, to_host
-from plantbench.core.casekit import StateLayout
+from plantbench.backend import namespace
+from plantbench.core.casekit import StateLayout, inputs_key, same_values
 from plantbench.core.control import batch_inputs
 from plantbench.units.peng_robinson import Flash
 from plantbench.units.staged_column import ColumnSpec, Feed, equilibrium_batch, evaluate_batch
@@ -257,9 +257,9 @@ class Plant:
         """The streams at a state, evaluated once for all the measurements that read them."""
         # Keyed by the values of the inputs, not the object: a control structure writes its
         # loops' outputs into one inputs object in turn, measuring between the writes.
-        key = _input_key(u)
+        key = inputs_key(u)
         key_x, key_u, st = self._snapshot
-        if key_x is None or not _same(key_x, x) or key_u != key:
+        if key_x is None or not same_values(key_x, x) or key_u != key:
             st = self.evaluate(x, u)[1]
             self._snapshot = (x.copy(), key, st)
         return st
@@ -560,17 +560,6 @@ class Plant:
         P2 = P1 * (1 + r1) ** (1 / ab)
         T2 = T1 * (1 + r1 / pp.eta_machines)
         return F * pp.cp_K101 * T2 * ((pp.P_sales / P2) ** ak - 1) / pp.eta_K101
-
-
-def _input_key(u: Inputs) -> tuple:
-    return tuple(to_host(np.asarray(0.0) if v is None else v).astype(float).tobytes()
-                 for v in (getattr(u, f.name) for f in fields(u)))
-
-
-def _same(a, b) -> bool:
-    """Whether two states, each one state or a batch, on the host or the device, are equal."""
-    xp = namespace(a)
-    return xp is namespace(b) and a.shape == b.shape and bool(xp.array_equal(a, b))
 
 
 @dataclass(frozen=True)

@@ -32,13 +32,13 @@ design point before Newton; it is not a different model of the plant.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import dataclass, field, replace
 from typing import ClassVar
 
 import numpy as np
 
-from plantbench.backend import namespace, to_host
-from plantbench.core.casekit import StateLayout, measured
+from plantbench.backend import namespace
+from plantbench.core.casekit import StateLayout, inputs_key, measured, same_values
 from plantbench.core.control import batch_inputs
 from plantbench.units.staged_column import ColumnSpec, Feed, equilibrium_batch, evaluate_batch
 
@@ -119,6 +119,7 @@ class Plant:
     _warm: dict = field(default_factory=dict, repr=False)
     _frozen: bool = field(default=False, repr=False)
     _snapshot: tuple = field(default=(None, None, None), repr=False)
+    _state_only: tuple = field(default=(None, None, None), repr=False)
 
     def __post_init__(self):
         pp = self.pp
@@ -160,6 +161,7 @@ class Plant:
     def freeze(self, x: np.ndarray, u: Inputs) -> None:
         """Start every later evaluation's iterations from their values at (x, u)."""
         self._frozen = False
+        self._state_only = (None, None, None)  # held at the previous warm starts
         self.evaluate(x, u)
         self._frozen = True
 
@@ -171,12 +173,44 @@ class Plant:
         """The streams at a state, evaluated once for all the measurements that read them."""
         # Keyed by the values of the inputs, not the object: a control structure writes its
         # loops' outputs into one inputs object in turn, measuring between the writes.
-        key = _input_key(u)
+        key = inputs_key(u)
         key_x, key_u, st = self._snapshot
-        if key_x is None or not _same(key_x, x) or key_u != key:
+        if key_x is None or not same_values(key_x, x) or key_u != key:
             st = self.evaluate(x, u)[1]
             self._snapshot = (x.copy(), key, st)
         return st
+
+    def temperatures(self, x):
+        """The drum's bubble point (K) and the stage and reboiler temperatures (K,
+        n_stages + 1), of one state or a batch: once the plant is frozen these depend on
+        the state alone, so a measure that reads them needs no evaluation of the streams,
+        whose key also holds the inputs a control structure is still writing."""
+        if x.ndim == 1:
+            T_D, eq = self._equilibrium(x[None], batch=False)
+            return float(T_D[0]), eq[1][0]
+        T_D, eq = self._equilibrium(x, batch=True)
+        return T_D, eq[1]
+
+    def _equilibrium(self, x, batch: bool):
+        """The drum's bubble point and the column's `equilibrium_batch`, x (m, n_x); held
+        for the next call at the same state once the plant is frozen."""
+        key_batch, key_x, held = self._state_only
+        if self._frozen and key_batch is batch and key_x is not None and same_values(key_x, x):
+            return held
+        xp, m = namespace(x), x.shape[0]
+        eos, keep = self._eos(xp, batch), not batch
+        s = self.layout.unpack(x)
+        P_drum = s["P_top"] * KPA
+        T_D, _ = eos.bubble_T(P_drum, s["x_D"], T0=self._start("drum_T", m, xp))
+        if keep:
+            self._keep("drum_T", T_D)
+        eq = equilibrium_batch(self.column, eos, s["x"], s["x_B"], s["P_top"] * KPA,
+                               T0=self._start("column_T", m, xp))
+        if keep:
+            self._keep("column_T", eq[1][0])
+        if self._frozen:
+            self._state_only = (batch, x.copy(), (T_D, eq))
+        return T_D, eq
 
     def _flash(self, eos, key, T, P, z, keep: bool):
         xp = namespace(z)
@@ -214,18 +248,9 @@ class Plant:
         Q_E100 = implied["Q_E100"] if hold else u.Q_E100
         dT_E100 = 0.0 if hold else (F * (h_in - h_out) + Q_E100 * KW) / pp.C_E100
 
-        # The drum liquid, at its bubble point at the top pressure.
-        P_drum = s["P_top"] * KPA
-        T_D, _ = eos.bubble_T(P_drum, s["x_D"], T0=self._start("drum_T", m, xp))
-        if keep:
-            self._keep("drum_T", T_D)
-        h_D = eos.h(T_D, P_drum, s["x_D"], "liquid")
-
-        # The column.
-        eq = equilibrium_batch(self.column, eos, s["x"], s["x_B"], s["P_top"] * KPA,
-                               T0=self._start("column_T", m, xp))
-        if keep:
-            self._keep("column_T", eq[1][0])
+        # The drum liquid, at its bubble point at the top pressure, and the column.
+        T_D, eq = self._equilibrium(x, batch)
+        h_D = eos.h(T_D, s["P_top"] * KPA, s["x_D"], "liquid")
         feeds = [Feed(0, u.L_reflux, s["x_D"], h_D), Feed(pp.feed_stage - 1, F, z, h_out)]
         B = u.v_VLV102 * pp.F_VLV102_max
         dM, dxs, dM_B, dx_B, col = evaluate_batch(
@@ -262,17 +287,6 @@ class Plant:
                           vapour_heated=heated.V,
                           implied={k: full(v) for k, v in implied.items()})
         return dx_state, streams
-
-
-def _input_key(u: Inputs) -> tuple:
-    return tuple(to_host(np.asarray(0.0) if v is None else v).astype(float).tobytes()
-                 for v in (getattr(u, f.name) for f in fields(u)))
-
-
-def _same(a, b) -> bool:
-    """Whether two states, each one state or a batch, on the host or the device, are equal."""
-    xp = namespace(a)
-    return xp is namespace(b) and a.shape == b.shape and bool(xp.array_equal(a, b))
 
 
 # ------------------------------------------------------------------------------------

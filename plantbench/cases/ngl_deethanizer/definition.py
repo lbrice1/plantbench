@@ -70,6 +70,9 @@ def measurements(design: Design) -> dict:
         k = i[name].start
         return lambda x, u, pp: measured(100.0 * x[..., k] / full)
 
+    def temperatures(x):
+        return plant.temperatures(x)
+
     def x_D(x):
         return x[..., i["x_D"]]
 
@@ -93,8 +96,8 @@ def measurements(design: Design) -> dict:
         "ethane recovery": lambda x, u, pp: ethane_recovery(plant, u, streams(x, u), x_D(x)),
         "propane recovery": lambda x, u, pp: measured(
             streams(x, u).B * x_B(x)[..., C3] / (u.F_feed * u.z_feed[..., C3])),
-        "condenser temperature": lambda x, u, pp: streams(x, u).T_drum - C,
-        "reboiler temperature": lambda x, u, pp: measured(streams(x, u).column.T[..., -1] - C),
+        "condenser temperature": lambda x, u, pp: temperatures(x)[0] - C,
+        "reboiler temperature": lambda x, u, pp: measured(temperatures(x)[1][..., -1] - C),
         "condenser duty": lambda x, u, pp: u.Q_condenser,  # kW
         "reboiler duty": lambda x, u, pp: u.Q_reboiler,  # kW
         "E-100 duty": lambda x, u, pp: u.Q_E100,  # kW
@@ -102,7 +105,7 @@ def measurements(design: Design) -> dict:
     # TIC-101 reads stage 4 and TIC-100 stage 28.
     for n in range(pp.n_stages):
         m[f"stage {n + 1} temperature"] = (
-            lambda x, u, pp, k=n: measured(streams(x, u).column.T[..., k] - C))
+            lambda x, u, pp, k=n: measured(temperatures(x)[1][..., k] - C))
     return m
 
 
