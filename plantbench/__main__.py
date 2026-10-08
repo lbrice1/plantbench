@@ -3,7 +3,7 @@
     plantbench list
     plantbench describe reactor_separator_recycle
     plantbench run jacketed_cstr [--config config.toml] [--t-end 600] [--dt 1] [--out run.npz]
-    plantbench generate spec.toml [--out DIR] [--workers N]
+    plantbench generate spec.toml [--out DIR] [--workers N] [--jacobian batched] [--device cuda]
     plantbench datasets [DIR]
     plantbench compare A B [--tol T] [--no-trajectories]
     plantbench card data/regimes [--format text|md|latex|json]
@@ -67,7 +67,8 @@ def _run(args) -> None:
     if args.config:
         with open(args.config, "rb") as f:
             config = case.validate(tomllib.load(f))
-    tr = pb.run(case, config, t_end=args.t_end, dt=args.dt)
+    tr = pb.run(case, config, t_end=args.t_end, dt=args.dt, jacobian=args.jacobian,
+                device=args.device)
     print(f"{case.id} {config.structure}: {tr.t.size} points over {tr.t[-1]:g} min, "
           f"{tr.wall_time:.2f} s, {tr.nfev} right-hand-side evaluations")
     for name, v in tr.y.items():
@@ -77,9 +78,19 @@ def _run(args) -> None:
         print(f"written to {args.out}")
 
 
+def _solver_arguments(p) -> None:
+    p.add_argument("--jacobian", choices=("internal", "batched"), default="internal",
+                   help="LSODA's own Jacobian (default), or one batched evaluation per "
+                        "Jacobian, for a case that supports it")
+    p.add_argument("--device", choices=("cpu", "cuda"), default="cpu",
+                   help="where a batched Jacobian is evaluated (default cpu); cuda needs "
+                        "plantbench[gpu]")
+
+
 def _generate(args) -> None:
     from plantbench.datagen import generate
-    out = generate(args.spec, out_dir=args.out, workers=args.workers)
+    out = generate(args.spec, out_dir=args.out, workers=args.workers,
+                   solver={"jacobian": args.jacobian, "device": args.device})
     print(f"dataset in {out}")
 
 
@@ -230,11 +241,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--t-end", type=float, default=1500.0, help="minutes (default 1500)")
     p.add_argument("--dt", type=float, default=1.0, help="output spacing, minutes (default 1)")
     p.add_argument("--out", type=Path, help="write the trajectory to this .npz file")
+    _solver_arguments(p)
     p.set_defaults(func=_run)
     p = sub.add_parser("generate", help="generate a dataset from a specification")
     p.add_argument("spec", type=Path)
     p.add_argument("--out", type=Path, help="directory (default data/<study name>)")
     p.add_argument("--workers", type=int, default=1)
+    _solver_arguments(p)
     p.set_defaults(func=_generate)
     p = sub.add_parser("datasets", help="the datasets on disk and what they are of")
     p.add_argument("dir", nargs="?", default="data", help="a dataset, or a directory of them")

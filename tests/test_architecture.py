@@ -18,11 +18,14 @@ PACKAGE = pathlib.Path(__file__).resolve().parents[1] / "plantbench"
 # The modules above the cases: they use the layers, and no layer uses them.
 TOP = {"datagen", "datasets", "report", "task", "sensitivity", "contract", "scaffold"}
 
-# What each layer may import from inside plantbench, besides itself.
+# What each layer may import from inside plantbench, besides itself.  `backend`, the
+# array module a batched evaluation runs on (NumPy or CuPy), is beneath all of them and
+# knows nothing of plants or control.
 ALLOWED = {
-    "core": set(),
-    "units": set(),
-    "heat": set(),
+    "backend": set(),
+    "core": {"backend"},
+    "units": {"backend"},
+    "heat": {"backend"},
 }
 
 
@@ -51,7 +54,9 @@ def _plantbench_imports(path: pathlib.Path) -> set[str]:
 
 @pytest.mark.parametrize("layer", sorted(ALLOWED))
 def test_layers_import_only_what_they_may(layer):
-    for path in (PACKAGE / layer).rglob("*.py"):
+    paths = [PACKAGE / f"{layer}.py"] if (PACKAGE / f"{layer}.py").exists() \
+        else (PACKAGE / layer).rglob("*.py")
+    for path in paths:
         imported = _plantbench_imports(path) - {layer}
         assert imported <= ALLOWED[layer], f"{path.name} imports {sorted(imported)}"
 

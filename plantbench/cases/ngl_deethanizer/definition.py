@@ -20,7 +20,7 @@ import numpy as np
 
 from plantbench.core import control as ctl
 from plantbench.core.case import Case, Config, override
-from plantbench.core.casekit import cached_design
+from plantbench.core.casekit import cached_design, measured
 
 from .model import Design, ethane_recovery, solve_design
 from .parameters import DeethanizerParameters, parameters
@@ -56,6 +56,7 @@ def make_design(config: Config) -> Design:
 
 
 def measurements(design: Design) -> dict:
+    """The measures, each of one state or of a batch (`casekit.measured`)."""
     plant, pp = design.plant, design.pp
     lay = plant.layout
     i = {name: lay.slices[name] for name in lay.shapes}
@@ -67,33 +68,33 @@ def measurements(design: Design) -> dict:
 
     def level(name, full):
         k = i[name].start
-        return lambda x, u, pp: float(100.0 * x[k] / full)
+        return lambda x, u, pp: measured(100.0 * x[..., k] / full)
 
     def x_D(x):
-        return x[i["x_D"]]
+        return x[..., i["x_D"]]
 
     def x_B(x):
-        return x[i["x_B"]]
+        return x[..., i["x_B"]]
 
     m = {
         # The controller PVs, in the units of the HYSYS case.
         "feed flow": lambda x, u, pp: 60.0 * u.F_feed,  # kmol/h, FIC-100
-        "feed temperature": lambda x, u, pp: float(x[i["T_E100"].start] - C),  # TIC-102
-        "overhead pressure": lambda x, u, pp: float(x[i["P_top"].start]),  # kPa, PIC-100
+        "feed temperature": lambda x, u, pp: measured(x[..., i["T_E100"].start] - C),  # TIC-102
+        "overhead pressure": lambda x, u, pp: measured(x[..., i["P_top"].start]),  # kPa, PIC-100
         "condenser level": level("M_D", pp.M_drum_full),  # %, LIC-100
         "reboiler level": level("M_B", pp.M_reboiler_full),  # %, LIC-101
         "reflux flow": lambda x, u, pp: 60.0 * u.L_reflux,  # kmol/h, FIC-101
-        "ethane in LPG": lambda x, u, pp: float(x_B(x)[C2]),  # mole fraction, XIC-100
+        "ethane in LPG": lambda x, u, pp: measured(x_B(x)[..., C2]),  # mole fraction, XIC-100
         # The products.
         "distillate flow": lambda x, u, pp: 60.0 * streams(x, u).D,  # kmol/h
         "LPG flow": lambda x, u, pp: 60.0 * streams(x, u).B,  # kmol/h
-        "ethane in distillate": lambda x, u, pp: float(x_D(x)[C2]),
-        "propane in distillate": lambda x, u, pp: float(x_D(x)[C3]),
+        "ethane in distillate": lambda x, u, pp: measured(x_D(x)[..., C2]),
+        "propane in distillate": lambda x, u, pp: measured(x_D(x)[..., C3]),
         "ethane recovery": lambda x, u, pp: ethane_recovery(plant, u, streams(x, u), x_D(x)),
-        "propane recovery": lambda x, u, pp: float(
-            streams(x, u).B * x_B(x)[C3] / (u.F_feed * u.z_feed[C3])),
+        "propane recovery": lambda x, u, pp: measured(
+            streams(x, u).B * x_B(x)[..., C3] / (u.F_feed * u.z_feed[..., C3])),
         "condenser temperature": lambda x, u, pp: streams(x, u).T_drum - C,
-        "reboiler temperature": lambda x, u, pp: float(streams(x, u).column.T[-1] - C),
+        "reboiler temperature": lambda x, u, pp: measured(streams(x, u).column.T[..., -1] - C),
         "condenser duty": lambda x, u, pp: u.Q_condenser,  # kW
         "reboiler duty": lambda x, u, pp: u.Q_reboiler,  # kW
         "E-100 duty": lambda x, u, pp: u.Q_E100,  # kW
@@ -101,7 +102,7 @@ def measurements(design: Design) -> dict:
     # TIC-101 reads stage 4 and TIC-100 stage 28.
     for n in range(pp.n_stages):
         m[f"stage {n + 1} temperature"] = (
-            lambda x, u, pp, k=n: float(streams(x, u).column.T[k] - C))
+            lambda x, u, pp, k=n: measured(streams(x, u).column.T[..., k] - C))
     return m
 
 

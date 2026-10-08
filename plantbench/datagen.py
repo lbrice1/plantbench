@@ -64,10 +64,19 @@ except ImportError:  # Windows: generations are not guarded against one another 
     fcntl = None
 
 STATUSES = ("ok", "invalid", "failed", "timeout")
+# How each run is integrated, which is not part of the specification: the batched
+# Jacobian changes a trajectory only within the solver's tolerance, as another machine
+# would, and the device not at all beyond that.  See `control.integrate`.
+SOLVER_DEFAULTS = {"jacobian": "internal", "device": "cpu"}
 
 
-def run_one(case_id: str, config: dict, run: dict, runs_dir: str) -> dict:
-    """Run one configuration and return its record.  Never raises for a bad run."""
+def run_one(case_id: str, config: dict, run: dict, runs_dir: str,
+            solver: dict | None = None) -> dict:
+    """Run one configuration and return its record.  Never raises for a bad run.
+
+    `solver` holds `jacobian` and `device` for `control.integrate`; a record notes them
+    when they are not the defaults."""
+    solver = {**SOLVER_DEFAULTS, **(solver or {})}
     case = load_case(case_id)
     record = {"run_id": None, "status": None, "message": "", "wall_time": np.nan,
               "nfev": -1, "features": {}, "config": config}
@@ -91,7 +100,7 @@ def run_one(case_id: str, config: dict, run: dict, runs_dir: str) -> dict:
     start = time.perf_counter()
     try:
         traj = run_case(case, cfg, t_end=float(run["t_end"]), dt=float(run["dt"]),
-                        wall_budget=run["wall_budget"])
+                        wall_budget=run["wall_budget"], **solver)
     except ctl.WallTimeExceeded as exc:
         record.update(status="timeout", message=str(exc))
     except Exception as exc:  # noqa: BLE001 -- recorded, not hidden: a failure is a result
@@ -102,6 +111,8 @@ def run_one(case_id: str, config: dict, run: dict, runs_dir: str) -> dict:
         traj.to_npz(Path(runs_dir) / f"{record['run_id']}.npz")
         record.update(status="ok", nfev=traj.nfev)
     record["wall_time"] = time.perf_counter() - start
+    if solver != SOLVER_DEFAULTS:
+        record["solver"] = solver
     return record
 
 
@@ -260,8 +271,9 @@ def _print(msg: str) -> None:
 
 
 def generate(spec: Spec | str | Path, out_dir: str | Path | None = None, workers: int = 1,
-             log: Callable[[str], None] = _print) -> Path:
-    """Run every configuration the specification describes that is not yet recorded."""
+             log: Callable[[str], None] = _print, solver: dict | None = None) -> Path:
+    """Run every configuration the specification describes that is not yet recorded.
+    `solver` is passed to `run_one`."""
     spec_path = None
     if not isinstance(spec, Spec):
         spec_path = Path(spec)
@@ -290,13 +302,13 @@ def generate(spec: Spec | str | Path, out_dir: str | Path | None = None, workers
             (out / "spec.json").write_text(json.dumps(spec.to_dict(), indent=2) + "\n")
 
     run_configurations(spec.case, expand(spec), out, spec.run, workers=workers, log=log,
-                       label=f"{spec.name}: ")
+                       label=f"{spec.name}: ", solver=solver)
     return out
 
 
 def run_configurations(case_id: str, configs, out_dir: str | Path, run: dict | None = None,
                        workers: int = 1, log: Callable[[str], None] = _print,
-                       label: str = "") -> list[dict]:
+                       label: str = "", solver: dict | None = None) -> list[dict]:
     """Run the given configurations into the dataset at `out_dir`, skipping any already
     recorded there, and return the records of those run now.
 
@@ -349,7 +361,7 @@ def run_configurations(case_id: str, configs, out_dir: str | Path, run: dict | N
                 log(f"[{i}/{len(todo)}] {r['run_id']} {r['status']:7s} {r['wall_time']:7.2f} s"
                     + (f"  {r['message'][:80]}" if r["message"] else ""))
 
-            args = [(case_id, c, run, str(runs_dir)) for c in todo]
+            args = [(case_id, c, run, str(runs_dir), solver) for c in todo]
             if workers <= 1:
                 for i, a in enumerate(args, 1):
                     record(run_one(*a), i)

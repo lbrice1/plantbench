@@ -65,7 +65,7 @@ plantbench/task         what is predicted from a dataset and how an answer is sc
 plantbench/sensitivity  Sobol' indices over a design space
 ```
 
-Imports run one way. `core`, `units` and `heat` import nothing from each other or from any case, no case imports another, and no case imports the modules that generate, read or score datasets. Nothing in the library imports the studies. `tests/test_architecture.py` enforces this. `core` knows nothing about any plant, so a new case cannot require a change there that encodes its own assumptions. If a case does not fit the interface, the interface is changed so that it fits every case.
+Imports run one way. `core`, `units` and `heat` import nothing from each other or from any case, only `backend`, the array module beneath them (NumPy or CuPy), no case imports another, and no case imports the modules that generate, read or score datasets. Nothing in the library imports the studies. `tests/test_architecture.py` enforces this. `core` knows nothing about any plant, so a new case cannot require a change there that encodes its own assumptions. If a case does not fit the interface, the interface is changed so that it fits every case.
 
 ## Generalizing on the second use
 
