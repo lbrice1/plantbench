@@ -22,5 +22,9 @@ git log --oneline -1
 nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv
 run() { pixi run --frozen -e cuda "$@"; }
 run test-gpu
-run python benchmarks/scaling.py
+run python benchmarks/scaling.py --states 16 64 256
 run python benchmarks/jacobian.py --cases ngl_deethanizer
+# The largest batches again, on the GPU only, with a numerical warning an error: the
+# traceback names the solve that overflowed, if one does.
+echo "warnings as errors, 64 Jacobians per call:"
+run python -W error::RuntimeWarning benchmarks/scaling.py --multiples 64 --cpu-max 0 --repeats 1

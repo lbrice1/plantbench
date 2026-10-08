@@ -246,6 +246,7 @@ class Plant:
     def freeze(self, x: np.ndarray, u: Inputs) -> None:
         """Start every later evaluation's iterations from their values at (x, u)."""
         self._frozen = False
+        self._snapshot = (None, None, None)  # held from the previous warm starts
         self.evaluate(x, u)
         self._frozen = True
 
