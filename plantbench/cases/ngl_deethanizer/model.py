@@ -33,11 +33,14 @@ design point before Newton; it is not a different model of the plant.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, fields, replace
+from typing import ClassVar
 
 import numpy as np
 
-from plantbench.core.casekit import StateLayout
-from plantbench.units.staged_column import ColumnSpec, Feed, equilibrium, evaluate
+from plantbench.backend import namespace, to_host
+from plantbench.core.casekit import StateLayout, measured
+from plantbench.core.control import batch_inputs
+from plantbench.units.staged_column import ColumnSpec, Feed, equilibrium_batch, evaluate_batch
 
 from .components import LABELS, equation_of_state, feed
 from .parameters import DeethanizerParameters
@@ -88,6 +91,16 @@ class Streams:
     vapour_heated: float  # the vapour fraction leaving E-100
     implied: dict = field(default_factory=dict)
 
+    def row(self, i: int) -> Streams:
+        """The streams of member i of a batch, as one evaluation returns them."""
+        return Streams(column=type(self.column)(**{k: v[i] for k, v in vars(self.column).items()}),
+                       **{k: float(getattr(self, k)[i]) for k in _SCALARS},
+                       implied={k: float(v[i]) for k, v in self.implied.items()})
+
+
+_SCALARS = ("T_drum", "h_drum", "F_condensed", "D", "B", "h_feed", "h_heated",
+            "vapour_heated")
+
 
 @dataclass
 class Plant:
@@ -96,7 +109,11 @@ class Plant:
     Its iterative solves (flashes, bubble points) start from values it holds.  While the
     design is being solved these follow the last evaluation; `freeze` fixes them at the
     design point, after which an evaluation is a function of the state and inputs alone,
-    to the last bit, as a finite-difference Jacobian needs."""
+    to the last bit, as a finite-difference Jacobian needs.
+
+    `evaluate` takes one state or a batch.  A batch starts every member's solves from the
+    values held and never updates them, and solves the cubic of the equation of state in
+    closed form (`PengRobinson.on`), on the device its states are on."""
 
     pp: DeethanizerParameters
     _warm: dict = field(default_factory=dict, repr=False)
@@ -119,6 +136,23 @@ class Plant:
                                  dP_stage=0.0,
                                  P_offsets=tuple(o * KPA for o in pp.P_offsets))
         self.C_P = pp.V_overhead / (R_GAS * pp.T_overhead)  # kmol/kPa
+        self._batch_eos = {}
+
+    def _eos(self, xp, batch: bool):
+        if not batch:
+            return self.eos
+        device = "cpu" if xp is np else "cuda"
+        if device not in self._batch_eos:
+            self._batch_eos[device] = self.eos.on(device)
+        return self._batch_eos[device]
+
+    def _start(self, key, m: int, xp):
+        """The held start of a solve, repeated for the m members of a batch."""
+        v = self._warm.get(key)
+        if v is None:
+            return None
+        v = xp.asarray(v)
+        return xp.tile(v, (m,) + (1,) * (v.ndim - 1))
 
     def state_names(self) -> list[str]:
         return self.layout.names({k: LABELS for k in ("x_D", "x", "x_B")})
@@ -139,58 +173,73 @@ class Plant:
         # loops' outputs into one inputs object in turn, measuring between the writes.
         key = _input_key(u)
         key_x, key_u, st = self._snapshot
-        if key_x is None or not np.array_equal(key_x, x) or key_u != key:
+        if key_x is None or not _same(key_x, x) or key_u != key:
             st = self.evaluate(x, u)[1]
-            self._snapshot = (np.array(x, copy=True), key, st)
+            self._snapshot = (x.copy(), key, st)
         return st
 
-    def _flash(self, key, T, P, z):
-        f = self.eos.flash_PT(np.array([T]), np.array([P * KPA]), z[None],
-                              K0=self._warm.get(key))
-        self._keep(key, f.K)
+    def _flash(self, eos, key, T, P, z, keep: bool):
+        xp = namespace(z)
+        f = eos.flash_PT(T, P * KPA, z, K0=self._start(key, len(z), xp))
+        if keep:
+            self._keep(key, f.K)
         return f
 
     def evaluate(self, x: np.ndarray, u: Inputs, hold: bool = False):
-        """The derivatives of every state, and the streams."""
-        pp, eos = self.pp, self.eos
+        """The derivatives of every state, and the streams.
+
+        For a batch, `x` is (m, n_x) and the fields of `u` carry a leading axis of m
+        (`control.batch_inputs`); the derivatives are then (m, n_x), and each stream
+        quantity (m,)."""
+        if x.ndim == 1:
+            d, st = self._evaluate(x[None], batch_inputs(u, 1), hold, batch=False)
+            return d[0], st.row(0)
+        return self._evaluate(x, u, hold, batch=True)
+
+    def _evaluate(self, x, u: Inputs, hold: bool, batch: bool):
+        xp = namespace(x)
+        m = x.shape[0]
+        pp, eos, keep = self.pp, self._eos(xp, batch), not batch
         s = self.layout.unpack(x)
-        z = np.asarray(u.z_feed, dtype=float)
+        z = u.z_feed
         F = u.F_feed
         implied = {}
 
         # E-100.
-        h_in = self._flash("feed", u.T_feed, u.P_feed, z).h[0]
-        heated = self._flash("heated", s["T_E100"], u.P_feed - pp.dP_E100, z)
-        h_out = heated.h[0]
+        h_in = self._flash(eos, "feed", u.T_feed, u.P_feed, z, keep).h
+        heated = self._flash(eos, "heated", s["T_E100"], u.P_feed - pp.dP_E100, z, keep)
+        h_out = heated.h
         if hold:
             implied["Q_E100"] = F * (h_out - h_in) / KW
         Q_E100 = implied["Q_E100"] if hold else u.Q_E100
         dT_E100 = 0.0 if hold else (F * (h_in - h_out) + Q_E100 * KW) / pp.C_E100
 
         # The drum liquid, at its bubble point at the top pressure.
-        P_drum = np.array([s["P_top"] * KPA])
-        T_D, _ = eos.bubble_T(P_drum, s["x_D"][None], T0=self._warm.get("drum_T"))
-        self._keep("drum_T", T_D)
-        h_D = eos.h(T_D, P_drum, s["x_D"][None], "liquid")[0]
+        P_drum = s["P_top"] * KPA
+        T_D, _ = eos.bubble_T(P_drum, s["x_D"], T0=self._start("drum_T", m, xp))
+        if keep:
+            self._keep("drum_T", T_D)
+        h_D = eos.h(T_D, P_drum, s["x_D"], "liquid")
 
         # The column.
-        eq = equilibrium(self.column, eos, s["x"], s["x_B"], s["P_top"] * KPA,
-                         T0=self._warm.get("column_T"))
-        self._keep("column_T", eq[1])
+        eq = equilibrium_batch(self.column, eos, s["x"], s["x_B"], s["P_top"] * KPA,
+                               T0=self._start("column_T", m, xp))
+        if keep:
+            self._keep("column_T", eq[1][0])
         feeds = [Feed(0, u.L_reflux, s["x_D"], h_D), Feed(pp.feed_stage - 1, F, z, h_out)]
         B = u.v_VLV102 * pp.F_VLV102_max
-        dM, dxs, dM_B, dx_B, col = evaluate(
+        dM, dxs, dM_B, dx_B, col = evaluate_batch(
             self.column, eos, s["M"], s["x"], s["M_B"], s["x_B"], s["P_top"] * KPA, feeds,
             Q_R=u.Q_reboiler * KW, B=B, eq=eq)
         if hold:
             # The reboiler composition does not depend on the draw, so it needs no
             # second evaluation.
-            B = col.L[-1] - col.V[-1]
+            B = col.L[:, -1] - col.V[:, -1]
             implied["v_VLV102"] = B / pp.F_VLV102_max
             dM_B = 0.0
 
         # The condenser, from the vapour leaving stage 1 to the drum liquid.
-        V_top, h_top, y_top = col.V[0], col.h_V[0], col.y[0]
+        V_top, h_top, y_top = col.V[:, 0], col.h_V[:, 0], col.y[:, 0]
         latent = h_top - h_D
         if hold:
             implied["Q_condenser"] = V_top * latent / KW
@@ -203,20 +252,27 @@ class Plant:
             D = F_cond - u.L_reflux
             implied["v_VLV101"] = D / pp.F_VLV101_max
         dM_D = F_cond - u.L_reflux - D
-        dx_D = F_cond * (y_top - s["x_D"]) / s["M_D"]
+        dx_D = F_cond[:, None] * (y_top - s["x_D"]) / s["M_D"][:, None]
 
         dx_state = self.layout.pack(T_E100=dT_E100, M_D=dM_D, x_D=dx_D, M=dM, x=dxs,
                                     M_B=dM_B, x_B=dx_B, P_top=dP_top)
-        streams = Streams(column=col, T_drum=float(T_D[0]), h_drum=float(h_D),
-                          F_condensed=float(F_cond), D=float(D), B=float(B),
-                          h_feed=float(h_in), h_heated=float(h_out),
-                          vapour_heated=float(heated.V[0]), implied=implied)
+        full = (lambda v: xp.broadcast_to(xp.asarray(v, dtype=float), (m,)))
+        streams = Streams(column=col, T_drum=T_D, h_drum=h_D, F_condensed=F_cond,
+                          D=full(D), B=full(B), h_feed=h_in, h_heated=h_out,
+                          vapour_heated=heated.V,
+                          implied={k: full(v) for k, v in implied.items()})
         return dx_state, streams
 
 
 def _input_key(u: Inputs) -> tuple:
-    return tuple(np.asarray(getattr(u, f.name), dtype=float).tobytes()
-                 for f in fields(u))
+    return tuple(to_host(np.asarray(0.0) if v is None else v).astype(float).tobytes()
+                 for v in (getattr(u, f.name) for f in fields(u)))
+
+
+def _same(a, b) -> bool:
+    """Whether two states, each one state or a batch, on the host or the device, are equal."""
+    xp = namespace(a)
+    return xp is namespace(b) and a.shape == b.shape and bool(xp.array_equal(a, b))
 
 
 # ------------------------------------------------------------------------------------
@@ -232,6 +288,8 @@ class Design:
     x: np.ndarray
     u: Inputs
     plant: Plant
+    # The right-hand side and the measures accept a batch of states.
+    batched: ClassVar[bool] = True
 
     def rhs(self, t: float, x: np.ndarray, u: Inputs, pp: DeethanizerParameters) -> np.ndarray:
         return self.plant.evaluate(x, u)[0]
@@ -263,7 +321,7 @@ def initial_state(plant: Plant) -> np.ndarray:
 def ethane_recovery(plant: Plant, u: Inputs, st: Streams, x_D: np.ndarray) -> float:
     """The fraction of the feed's ethane leaving in the distillate."""
     C2 = plant.eos.c.names.index("ethane")
-    return float(st.D * x_D[C2] / (u.F_feed * u.z_feed[C2]))
+    return measured(st.D * x_D[..., C2] / (u.F_feed * u.z_feed[..., C2]))
 
 
 def design_residuals(plant: Plant, x: np.ndarray, u: Inputs) -> np.ndarray:

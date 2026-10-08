@@ -26,7 +26,13 @@ from typing import Any, Callable
 import numpy as np
 from scipy.integrate import solve_ivp
 
+from plantbench.backend import check as check_device
+from plantbench.backend import clamp, module, namespace, to_device, to_host
+
 from .instruments import Actuator, Instrument
+
+# How the Jacobian of the closed loop is formed; see `integrate`.
+JACOBIANS = ("internal", "batched")
 
 
 @dataclass
@@ -65,7 +71,7 @@ class Loop:
                              "with bias_from_design, or set one explicitly")
         e = self.setpoint - pv
         raw = self.bias + self.Kc * (e + integral / self.tau_I)
-        return min(max(raw, self.lo), self.hi), raw
+        return clamp(raw, self.lo, self.hi), raw
 
 
 @dataclass
@@ -143,10 +149,13 @@ def initial_augmented(structure: Structure, design) -> np.ndarray:
 
 def apply(structure: Structure, x: np.ndarray, aug: np.ndarray, u0,
           pp, t: float = 0.0) -> tuple[Any, np.ndarray]:
-    """Evaluate every loop and return the resulting inputs and the augmented rates."""
+    """Evaluate every loop and return the resulting inputs and the augmented rates.
+
+    For a batch, `x` is (m, n), `aug` (m, n_aug) and the fields of `u0` carry the same
+    leading axis (`batch_inputs`); the measures must then accept a batch as well."""
     u = replace(u0)
     slots, n_aug = state_layout(structure)
-    d_integ = np.zeros(n_aug)
+    d_integ = namespace(x).zeros(x.shape[:-1] + (n_aug,))
     # A primary loop writes the set-point of a secondary rather than a valve, so the
     # structure is evaluated with a local copy whose set-points can be overwritten.
     live = [_scheduled(lp, t) for lp in structure]
@@ -162,11 +171,11 @@ def apply(structure: Structure, x: np.ndarray, aug: np.ndarray, u0,
         if inst is None:
             pv = true_pv
         else:
-            i_states = aug[slots[k][0]]
+            i_states = aug[..., slots[k][0]]
             pv = inst.output(i_states, true_pv)
             if inst.n_states:
-                d_integ[slots[k][0]] = inst.derivatives(i_states, true_pv)
-        value, raw = loop.output(pv, aug[k])
+                d_integ[..., slots[k][0]] = inst.derivatives(i_states, true_pv)
+        value, raw = loop.output(pv, aug[..., k])
         if loop.mv.startswith("sp:"):
             target = loop.mv[3:]
             for j, other in enumerate(live):
@@ -181,27 +190,27 @@ def apply(structure: Structure, x: np.ndarray, aug: np.ndarray, u0,
             if act is None:
                 setattr(u, loop.mv, value)
             else:
-                a_states = aug[slots[k][1]]
+                a_states = aug[..., slots[k][1]]
                 setattr(u, loop.mv, act.output(a_states, value))
                 if act.n_states:
-                    d_integ[slots[k][1]] = act.derivatives(a_states, value)
+                    d_integ[..., slots[k][1]] = act.derivatives(a_states, value)
         # Back-calculation anti-windup with tracking time tau_I: on a limit, the integral
         # is pulled back until the unclamped output sits at the limit.  Unlike switching
         # integration off, this keeps the right-hand side continuous, so the integrator does
         # not chatter across a limit.
-        d_integ[k] = (loop.setpoint - pv) + (value - raw) / loop.Kc
+        d_integ[..., k] = (loop.setpoint - pv) + (value - raw) / loop.Kc
     for k, station in enumerate(live):
         if isinstance(station, Ratio):
             value = station.ratio * getattr(u, station.source)
-            value = min(max(value, station.lo), station.hi)
+            value = clamp(value, station.lo, station.hi)
             act = station.actuator
             if act is None:
                 setattr(u, station.mv, value)
             else:
-                a_states = aug[slots[k][1]]
+                a_states = aug[..., slots[k][1]]
                 setattr(u, station.mv, act.output(a_states, value))
                 if act.n_states:
-                    d_integ[slots[k][1]] = act.derivatives(a_states, value)
+                    d_integ[..., slots[k][1]] = act.derivatives(a_states, value)
     return u, d_integ
 
 
@@ -221,6 +230,78 @@ def closed_loop_rhs(t, y, structure, u0, pp, disturbance, model):
     base = u0 if disturbance is None else disturbance(t, u0)
     u, d_integ = apply(structure, x, aug, base, pp, t)
     return np.concatenate([model(t, x, u, pp), d_integ])
+
+
+# --------------------------------------------------------------------------------
+# The batched closed loop
+# --------------------------------------------------------------------------------
+#
+# A design whose right-hand side accepts a batch of states, (m, n) with inputs whose fields
+# carry the same leading axis, declares `batched = True`; so must the measures its loops
+# read.  The closed loop can then be evaluated at many states in one call, which is what
+# a finite-difference Jacobian needs: one perturbed state per column.  On a GPU the whole
+# Jacobian is one batch.
+
+
+def supports_batch(design) -> bool:
+    """Whether the design's right-hand side and measures accept a batch of states."""
+    return bool(getattr(design, "batched", False))
+
+
+def batch_inputs(u, m: int, xp=np):
+    """A copy of the inputs `u` with every field repeated along a new leading axis of m:
+    a scalar becomes (m,), a vector (m, k).  A field that is None stays None."""
+    fields = {}
+    for f in dataclasses.fields(u):
+        v = getattr(u, f.name)
+        if v is not None:
+            v = xp.asarray(v, dtype=float)
+            v = xp.broadcast_to(v, (m,) + v.shape).copy()
+        fields[f.name] = v
+    return replace(u, **fields)
+
+
+def closed_loop_rhs_batch(t: float, Y, structure, u0, pp, disturbance, model):
+    """`closed_loop_rhs` at m states at once, Y (m, n + n_aug), all at time t.
+
+    The disturbance is applied once, to the nominal inputs, and the result repeated for
+    every state; on the device, Y is a CuPy array and the result is one too."""
+    xp = namespace(Y)
+    n = Y.shape[-1] - n_augmented(structure)
+    X, aug = Y[:, :n], Y[:, n:]
+    base = u0 if disturbance is None else disturbance(t, u0)
+    u, d_integ = apply(structure, X, aug, batch_inputs(base, Y.shape[0], xp), pp, t)
+    return xp.concatenate([model(t, X, u, pp), d_integ], axis=1)
+
+
+# The relative increment of the forward-difference Jacobian, the square root of the
+# machine epsilon, with a floor of one unit for states that sit near zero (integrals,
+# deadtime states).
+_FD_STEP = float(np.sqrt(np.finfo(float).eps))
+
+
+def jacobian_batched(t: float, y, structure, u0, pp, disturbance, model):
+    """The Jacobian of the closed loop at (t, y) by forward differences, every column in
+    one batched evaluation of n + 1 states.  `y` may be a CuPy array; so is the result."""
+    xp = namespace(y)
+    h = _FD_STEP * xp.maximum(xp.abs(y), 1.0)
+    h = (y + h) - y  # an increment the arithmetic represents exactly
+    Y = xp.concatenate([y[None], y[None] + xp.diag(h)])
+    F = closed_loop_rhs_batch(t, Y, structure, u0, pp, disturbance, model)
+    return ((F[1:] - F[0]) / h[:, None]).T
+
+
+def _jacobian_callback(design, structure, disturbance, device: str):
+    """The `jac` callable LSODA takes, evaluating on `device` and returning to the host."""
+    if not supports_batch(design):
+        raise ValueError(f"{type(design).__name__} does not declare a batched right-hand "
+                         "side (`batched = True`); use jacobian='internal'")
+    args = (structure, design.u, design.pp, disturbance, design.rhs)
+
+    def jac(t, y, *_):  # solve_ivp passes the right-hand side's arguments as well
+        return to_host(jacobian_batched(t, to_device(y, device), *args))
+
+    return jac
 
 
 class WallTimeExceeded(RuntimeError):
@@ -249,6 +330,8 @@ def integrate(
     measurements: dict[str, Callable] | None = None,
     wall_budget: float | None = None,
     breakpoints=None,
+    jacobian: str = "internal",
+    device: str = "cpu",
 ) -> Run:
     """Integrate the closed-loop plant.
 
@@ -273,16 +356,30 @@ def integrate(
 
     A trajectory with a non-finite state raises rather than being returned: the solver
     does not always reject a step that produced one.
+
+    `jacobian` is "internal", LSODA's own forward differences, one right-hand side call per
+    state, which is what every published result was produced with; or "batched", the same
+    differences evaluated as one batch by `jacobian_batched` and handed to LSODA, on
+    `device` ("cpu" or "cuda").  The two agree to the accuracy of the differences, so the
+    trajectories agree to the solver's tolerance but not to the last bit.  "batched" needs
+    a design that declares `batched = True`.
     """
+    if jacobian not in JACOBIANS:
+        raise ValueError(f"jacobian must be one of {JACOBIANS}, not {jacobian!r}")
+    check_device(device)
+    if device != "cpu" and jacobian != "batched":
+        raise ValueError("a device other than the CPU needs jacobian='batched'")
     pp = design.pp
     y0 = np.concatenate([design.x, initial_augmented(structure, design)])
     t_eval = np.linspace(0.0, t_end, n_points)
     events = None if wall_budget is None else _deadline(time.perf_counter() + wall_budget)
     args = (structure, design.u, pp, disturbance, design.rhs)
+    jac = (None if jacobian == "internal"
+           else {"jac": _jacobian_callback(design, structure, disturbance, device)})
     cuts = sorted({float(b) for b in (breakpoints or ()) if 0.0 < b < t_end})
     if not cuts:
         sol = solve_ivp(closed_loop_rhs, (0.0, t_end), y0, args=args, method="LSODA",
-                        t_eval=t_eval, rtol=rtol, atol=atol, events=events)
+                        t_eval=t_eval, rtol=rtol, atol=atol, events=events, **(jac or {}))
         _stop_on_deadline(sol, wall_budget)
         if not sol.success:
             raise RuntimeError(f"closed-loop integration failed: {sol.message}")
@@ -290,7 +387,7 @@ def integrate(
     else:
         t_out, y_out, nfev = _integrate_piecewise(closed_loop_rhs, y0, args,
                                                    [0.0, *cuts, t_end], t_eval, rtol, atol,
-                                                   events, wall_budget)
+                                                   events, wall_budget, jac)
     finite = np.isfinite(y_out).all(axis=0)
     if not finite.all():
         raise RuntimeError(f"closed-loop integration produced a non-finite state at "
@@ -349,7 +446,7 @@ def _stop_on_deadline(sol, wall_budget) -> None:
 
 
 def _integrate_piecewise(rhs, y0, args, edges, t_eval, rtol, atol, events=None,
-                         wall_budget=None):
+                         wall_budget=None, jac=None):
     """Integrate segment by segment between `edges`, restarting the solver at each."""
     ts, ys, nfev = [], [], 0
     y = y0
@@ -359,7 +456,7 @@ def _integrate_piecewise(rhs, y0, args, edges, t_eval, rtol, atol, events=None,
         # The segment end is always evaluated, to start the next segment from it.
         grid = np.union1d(inside, [b])
         sol = solve_ivp(rhs, (a, b), y, args=args, method="LSODA", t_eval=grid,
-                        rtol=rtol, atol=atol, events=events)
+                        rtol=rtol, atol=atol, events=events, **(jac or {}))
         _stop_on_deadline(sol, wall_budget)
         if not sol.success:
             raise RuntimeError(f"closed-loop integration failed on [{a:g}, {b:g}]: "
@@ -565,21 +662,39 @@ def with_instruments(structure: Structure,
 STRUCTURAL_ZERO = 1e-5
 
 
-def closed_loop_spectrum(design, structure: Structure) -> np.ndarray:
+def closed_loop_spectrum(design, structure: Structure, jacobian: str = "internal",
+                         device: str = "cpu") -> np.ndarray:
     """Eigenvalues of the closed-loop plant linearized at its design steady state.
 
-    Structural zeros are removed.
+    Structural zeros are removed.  The Jacobian is by central differences, a column at a
+    time, or with `jacobian="batched"` every column in one batch of 2n states on `device`,
+    which agrees to the accuracy of the differences.
     """
     y0 = np.concatenate([design.x, initial_augmented(structure, design)])
-    f = lambda y: closed_loop_rhs(0.0, y, structure, design.u, design.pp, None, design.rhs)
     n = len(y0)
-    J = np.empty((n, n))
-    for j in range(n):
-        h = 1e-6 * max(1.0, abs(y0[j]))
-        yp, ym = y0.copy(), y0.copy()
-        yp[j] += h
-        ym[j] -= h
-        J[:, j] = (f(yp) - f(ym)) / (2 * h)
+    if jacobian == "batched":
+        if not supports_batch(design):
+            raise ValueError(f"{type(design).__name__} does not declare a batched "
+                             "right-hand side (`batched = True`)")
+        xp = module(device)
+        y = to_device(y0, device)
+        h = 1e-6 * xp.maximum(1.0, xp.abs(y))
+        E = xp.diag(h)
+        F = closed_loop_rhs_batch(0.0, xp.concatenate([y + E, y - E]), structure,
+                                  design.u, design.pp, None, design.rhs)
+        J = to_host(((F[:n] - F[n:]) / (2 * h[:, None])).T)
+    elif jacobian == "internal":
+        f = lambda y: closed_loop_rhs(0.0, y, structure, design.u, design.pp, None,
+                                      design.rhs)
+        J = np.empty((n, n))
+        for j in range(n):
+            h = 1e-6 * max(1.0, abs(y0[j]))
+            yp, ym = y0.copy(), y0.copy()
+            yp[j] += h
+            ym[j] -= h
+            J[:, j] = (f(yp) - f(ym)) / (2 * h)
+    else:
+        raise ValueError(f"jacobian must be one of {JACOBIANS}, not {jacobian!r}")
     ev = np.linalg.eigvals(J)
     n_ratio = sum(isinstance(e, Ratio) for e in structure)
     nearest = np.argsort(np.abs(ev))[:n_ratio]

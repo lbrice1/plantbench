@@ -314,13 +314,16 @@ class Trajectory:
 
 def run(case: Case, config: Config | Mapping, t_end: float, n_points: int | None = None,
         dt: float | None = None, rtol: float = 1e-8, atol: float = 1e-10,
-        wall_budget: float | None = None) -> Trajectory:
+        wall_budget: float | None = None, jacobian: str = "internal",
+        device: str = "cpu") -> Trajectory:
     """Simulate one configuration of a case and return its trajectory.
 
     Give the output grid as `n_points` over [0, t_end] or as a spacing `dt`.  A
     `wall_budget` in seconds stops a run that is taking too long by raising
     `control.WallTimeExceeded`.  The integration restarts at every discontinuity the
     disturbance and the set-point schedule declare (`control.breakpoints_of`).
+    `jacobian` and `device` choose how the solver's Jacobian is formed; see
+    `control.integrate`.
     """
     setup = build(case, config)
     if n_points is None:
@@ -329,7 +332,8 @@ def run(case: Case, config: Config | Mapping, t_end: float, n_points: int | None
     start = time.perf_counter()
     r = ctl.integrate(setup.design, setup.structure, t_end, setup.disturbance, n_points,
                       rtol, atol, measurements=measurements, wall_budget=wall_budget,
-                      breakpoints=ctl.breakpoints_of(setup.disturbance, setup.structure))
+                      breakpoints=ctl.breakpoints_of(setup.disturbance, setup.structure),
+                      jacobian=jacobian, device=device)
     return Trajectory(case=case.id, config=setup.config.to_dict(), t=r.t, x=r.X,
                       state_names=list(case.state_names(setup.design)), u=r.U, y=r.Y,
                       wall_time=time.perf_counter() - start, nfev=r.nfev)

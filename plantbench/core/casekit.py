@@ -2,6 +2,7 @@
 
     StateLayout          named blocks of the state vector: pack, unpack, state names
     state_measurement    a measurement that reads one state
+    measured             a measure's value, for one state or a batch
     cached_design        cache a slow design solve per worker process
     fixed_point_residual how far the design point is from a steady state, and where
 
@@ -16,6 +17,8 @@ from typing import Callable, Sequence
 
 import numpy as np
 
+from plantbench.backend import namespace
+
 
 class StateLayout:
     """The state vector as named blocks, in order, each a scalar or an array.
@@ -27,6 +30,9 @@ class StateLayout:
 
     A shape is `()` for a scalar, an int for a vector or a tuple for an array; an array
     block is stored row by row.
+
+    A batch of m states, an array (m, size), unpacks to blocks with the same leading
+    axis, a scalar block to (m,), and packs back from them, on NumPy or CuPy alike.
     """
 
     def __init__(self, blocks: Sequence[tuple[str, int | tuple[int, ...]]]):
@@ -44,20 +50,30 @@ class StateLayout:
 
     def unpack(self, x: np.ndarray) -> dict[str, float | np.ndarray]:
         """The blocks of `x` by name: a float for a scalar block, a view for an array."""
-        if len(x) != self.size:
-            raise ValueError(f"{len(x)} states for a layout of {self.size}")
-        return {name: float(x[s.start]) if self.shapes[name] == () else
-                x[s].reshape(self.shapes[name]) for name, s in self.slices.items()}
+        if x.shape[-1] != self.size:
+            raise ValueError(f"{x.shape[-1]} states for a layout of {self.size}")
+        if x.ndim == 1:
+            return {name: float(x[s.start]) if self.shapes[name] == () else
+                    x[s].reshape(self.shapes[name]) for name, s in self.slices.items()}
+        lead = x.shape[:-1]
+        return {name: x[..., s.start] if self.shapes[name] == () else
+                x[..., s].reshape(lead + self.shapes[name]) for name, s in self.slices.items()}
 
     def pack(self, **blocks) -> np.ndarray:
-        """The state vector from every block by name."""
+        """The state vector from every block by name, with the leading axis of the blocks
+        if they carry one."""
         missing = set(self.shapes) - set(blocks)
         extra = set(blocks) - set(self.shapes)
         if missing or extra:
             raise KeyError(f"blocks missing {sorted(missing)}, unknown {sorted(extra)}")
-        x = np.empty(self.size)
+        xp = namespace(*blocks.values())
+        values = {k: xp.asarray(v, dtype=float) for k, v in blocks.items()}
+        lead = np.broadcast_shapes(*(v.shape[:v.ndim - len(self.shapes[k])]
+                                     for k, v in values.items()))
+        x = xp.empty(lead + (self.size,))
         for name, s in self.slices.items():
-            x[s] = np.asarray(blocks[name], dtype=float).reshape(-1)
+            v = values[name]
+            x[..., s] = xp.broadcast_to(v, lead + self.shapes[name]).reshape(lead + (-1,))
         return x
 
     def names(self, labels: dict[str, Sequence[str]] | None = None) -> list[str]:
@@ -88,6 +104,14 @@ class StateLayout:
             raise KeyError(f"no state {name!r} in the layout") from None
 
 
+def measured(v):
+    """A measure's value: a float for one state, the array itself for a batch.
+
+    A measure written with `x[..., k]` and `u.field[..., k]` serves one state and a batch
+    alike; ending it in `measured(...)` rather than `float(...)` keeps it so."""
+    return float(v) if np.ndim(v) == 0 else v
+
+
 def state_measurement(state: int | str, layout: StateLayout | None = None) -> Callable:
     """A measurement that reads one state, by its index or by its name in `layout`."""
     if isinstance(state, str) and layout is None:
@@ -95,7 +119,7 @@ def state_measurement(state: int | str, layout: StateLayout | None = None) -> Ca
     i = layout.index(state) if isinstance(state, str) else int(state)
 
     def measure(x, u, pp) -> float:
-        return float(x[i])
+        return float(x[i]) if x.ndim == 1 else x[..., i]
 
     measure.__name__ = f"state_{state}"
     return measure

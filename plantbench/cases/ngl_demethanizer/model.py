@@ -67,11 +67,15 @@ different model of the plant.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, fields, replace
+from typing import ClassVar
 
 import numpy as np
 
+from plantbench.backend import namespace, to_host
 from plantbench.core.casekit import StateLayout
-from plantbench.units.staged_column import ColumnSpec, Feed, equilibrium, evaluate
+from plantbench.core.control import batch_inputs
+from plantbench.units.peng_robinson import Flash
+from plantbench.units.staged_column import ColumnSpec, Feed, equilibrium_batch, evaluate_batch
 
 from .components import LABELS, equation_of_state, feed
 from .parameters import BASES, NGLParameters
@@ -174,6 +178,23 @@ class Streams:
     h_overhead: float = 0.0  # kJ/kmol, the overhead, after the crr mixing point
     implied: dict = field(default_factory=dict)
 
+    def row(self, i: int) -> Streams:
+        """The streams of member i of a batch, as one evaluation returns them."""
+        out = {}
+        for f in fields(self):
+            v = getattr(self, f.name)
+            if f.name == "implied":
+                out[f.name] = {k: float(w[i]) for k, w in v.items()}
+            elif f.name in ("tk100", "tk101"):
+                out[f.name] = None if v is None else v.member(i)
+            elif f.name == "column":
+                out[f.name] = type(v)(**{k: w[i] for k, w in vars(v).items()})
+            elif f.name == "y_expander":
+                out[f.name] = v[i]
+            else:
+                out[f.name] = float(v[i])
+        return Streams(**out)
+
 
 @dataclass
 class Plant:
@@ -182,7 +203,11 @@ class Plant:
     Its iterative solves (flashes, bubble points, the recompression) start from values it
     holds.  While the design is being solved these follow the last evaluation; `freeze`
     fixes them at the design point, after which an evaluation is a function of the state
-    and inputs alone, to the last bit, as a finite-difference Jacobian needs."""
+    and inputs alone, to the last bit, as a finite-difference Jacobian needs.
+
+    `evaluate` takes one state or a batch.  A batch starts every member's solves from the
+    values held and never updates them, and solves the cubic of the equation of state in
+    closed form (`PengRobinson.on`), on the device its states are on."""
 
     pp: NGLParameters
     scheme: str = "conventional"
@@ -212,6 +237,7 @@ class Plant:
                                  dP_stage=pp.dP_stage * KPA,
                                  P_offsets=tuple(o * KPA for o in offsets[skip:]))
         self.C_P = self.pp.V_overhead / (R_GAS * self.pp.T_overhead)  # kmol/kPa
+        self._batch_eos = {}
 
     def state_names(self) -> list[str]:
         labels = LABELS[self.components]
@@ -233,61 +259,101 @@ class Plant:
         # loops' outputs into one inputs object in turn, measuring between the writes.
         key = _input_key(u)
         key_x, key_u, st = self._snapshot
-        if key_x is None or not np.array_equal(key_x, x) or key_u != key:
+        if key_x is None or not _same(key_x, x) or key_u != key:
             st = self.evaluate(x, u)[1]
-            self._snapshot = (np.array(x, copy=True), key, st)
+            self._snapshot = (x.copy(), key, st)
         return st
 
     # -- one evaluation ----------------------------------------------------------------
 
-    def _flash(self, key, T, P, z):
-        f = self.eos.flash_PT(T, P, z, K0=self._warm.get(key))
-        self._keep(key, f.K)
-        return f
+    def _eos(self, xp, batch: bool):
+        if not batch:
+            return self.eos
+        device = "cpu" if xp is np else "cuda"
+        if device not in self._batch_eos:
+            self._batch_eos[device] = self.eos.on(device)
+        return self._batch_eos[device]
 
-    def _vapour(self, T, P, y):
-        """Enthalpy and entropy of a vapour stream at T K and P kPa."""
-        T, P = np.array([T]), np.array([P * KPA])
-        return self.eos.h(T, P, y[None], "vapour")[0], self.eos.s(T, P, y[None], "vapour")[0]
+    def _start(self, key, m: int, xp, default=None):
+        """The held start of a solve, repeated for the m members of a batch."""
+        v = self._warm.get(key)
+        if v is None:
+            return default
+        v = xp.asarray(v)
+        return xp.tile(v, (m,) + (1,) * (v.ndim - 1))
 
-    def _liquid_h(self, T, P, x):
-        return self.eos.h(np.array([T]), np.array([P * KPA]), x[None], "liquid")[0]
+    def _flash(self, eos, key, T, P, z, keep: bool):
+        """PT flashes of r streams in each of m members: T and P (m, r), z (m, r, n_c).
+        The result's arrays carry both axes."""
+        xp = namespace(z)
+        m, r, nc = z.shape
+        f = eos.flash_PT(T.reshape(-1), P.reshape(-1), z.reshape(-1, nc),
+                         K0=self._start(key, m, xp))
+        if keep:
+            self._keep(key, f.K)
+        return Flash(**{k: v.reshape((m, r) + v.shape[1:]) for k, v in vars(f).items()})
+
+    def _vapour(self, eos, T, P, y):
+        """Enthalpy and entropy of a vapour stream at T K and P kPa, each (m,)."""
+        P = namespace(T).full_like(T, P * KPA) if np.ndim(P) == 0 else P * KPA
+        return eos.h(T, P, y, "vapour"), eos.s(T, P, y, "vapour")
+
+    def _liquid_h(self, eos, T, P, x):
+        P = namespace(T).full_like(T, P * KPA) if np.ndim(P) == 0 else P * KPA
+        return eos.h(T, P, x, "liquid")
 
     def evaluate(self, x: np.ndarray, u: Inputs, hold: bool = False):
-        """The derivatives of every state, and the streams."""
-        pp, eos, n, scheme = self.pp, self.eos, self.pp.n_cells, self.scheme
+        """The derivatives of every state, and the streams.
+
+        For a batch, `x` is (m, n_x) and the fields of `u` carry a leading axis of m
+        (`control.batch_inputs`); the derivatives are then (m, n_x), and each stream
+        quantity carries the leading axis."""
+        if x.ndim == 1:
+            d, st = self._evaluate(x[None], batch_inputs(u, 1), hold, batch=False)
+            return d[0], st.row(0)
+        return self._evaluate(x, u, hold, batch=True)
+
+    def _evaluate(self, x, u: Inputs, hold: bool, batch: bool):
+        xp = namespace(x)
+        m = x.shape[0]
+        pp, n, scheme = self.pp, self.pp.n_cells, self.scheme
+        eos, keep = self._eos(xp, batch), not batch
         s = self.layout.unpack(x)
-        z = np.asarray(u.z_feed, dtype=float)
+        z = u.z_feed
         F = u.F_feed
         stages = STAGES[scheme]
         implied = {}
+        col_ = (lambda v: v[:, None])  # (m,) -> (m, 1), to concatenate along the streams
+        rows = (lambda v, r: xp.broadcast_to(v[:, None], (m, r) + v.shape[1:]))
+        full = (lambda v: xp.broadcast_to(xp.asarray(v, dtype=float), (m,)))
 
         # Feed, E-100 hot side and TK-100: one batch of flashes.
-        T_a = np.concatenate([[u.T_feed], s["T_E100h"], [s["T_TK100"]]])
-        P_a = np.concatenate([np.full(n + 1, u.P_feed), [pp.P_TK100]]) * KPA
-        fa = self._flash("a", T_a, P_a, np.tile(z, (n + 2, 1)))
-        h_feed, h_E100h, tk100 = fa.h[0], fa.h[1:n + 1], _row(fa, n + 1)
+        T_a = xp.concatenate([col_(u.T_feed), s["T_E100h"], col_(s["T_TK100"])], axis=1)
+        P_a = xp.concatenate([rows(u.P_feed, n + 1), xp.full((m, 1), pp.P_TK100)], axis=1) * KPA
+        fa = self._flash(eos, "a", T_a, P_a, rows(z, n + 2), keep)
+        h_feed, h_E100h, tk100 = fa.h[:, 0], fa.h[:, 1:n + 1], _row(fa, n + 1)
         V1, y1 = tk100.V * F, tk100.y
         L_in100 = (1 - tk100.V) * F
         Q_chiller = u.Q_chiller
         if hold:
-            implied["Q_chiller"] = Q_chiller = F * (h_E100h[-1] - tk100.h) / KW
+            implied["Q_chiller"] = Q_chiller = F * (h_E100h[:, -1] - tk100.h) / KW
             implied["v_LCV100"] = L_in100 / pp.F_LCV100_max
         L100 = implied["v_LCV100"] * pp.F_LCV100_max if hold \
             else u.v_LCV100 * pp.F_LCV100_max
-        h_chiller_out = h_E100h[-1] - Q_chiller * KW / F
-        h_V1, _ = self._vapour(s["T_TK100"], pp.P_TK100, y1)
+        h_chiller_out = h_E100h[:, -1] - Q_chiller * KW / F
+        h_V1, _ = self._vapour(eos, s["T_TK100"], pp.P_TK100, y1)
 
-        h_L100 = self._liquid_h(s["T_TK100"], pp.P_TK100, s["x_TK100"])
-        P_col = self.column.pressures(s["P_top"] * KPA) / KPA
+        h_L100 = self._liquid_h(eos, s["T_TK100"], pp.P_TK100, s["x_TK100"])
+        P_col = self.column.pressures(col_(s["P_top"] * KPA)) / KPA
 
         # E-102 hot side, and TK-101 in the conventional scheme.
         if scheme == "conventional":
             F_E102h, z_br, h_br = V1, y1, h_V1
-            T_b = np.concatenate([s["T_E102h"], [s["T_TK101"]]])
-            P_b = np.concatenate([np.full(n, pp.P_TK100), [pp.P_TK101]]) * KPA
-            fb = self._flash("b", T_b, P_b, np.tile(y1, (n + 1, 1)))
-            h_E102h, tk101 = fb.h[:n], _row(fb, n)
+            T_b = xp.concatenate([s["T_E102h"], col_(s["T_TK101"])], axis=1)
+            P_b = xp.concatenate([xp.full((m, n), pp.P_TK100),
+                                  xp.full((m, 1), pp.P_TK101)], axis=1) * KPA
+            fb = self._flash(eos, "b", T_b, P_b, rows(y1, n + 1), keep)
+            h_E102h, tk101 = fb.h[:, :n], _row(fb, n)
             F_exp, y_exp = tk101.V * V1, tk101.y
             T_exp, P_exp = s["T_TK101"], pp.P_TK101
             L_in101 = (1 - tk101.V) * V1
@@ -300,56 +366,58 @@ class Plant:
             # adiabatically after their valves.
             F_bv, F_bl = V1 / (1 + u.split), u.liquid_split * L100
             F_E102h = F_bv + F_bl
-            z_br = (F_bv * y1 + F_bl * s["x_TK100"]) / F_E102h
+            z_br = (F_bv[:, None] * y1 + F_bl[:, None] * s["x_TK100"]) / F_E102h[:, None]
             h_br = (F_bv * h_V1 + F_bl * h_L100) / F_E102h
-            fb = self._flash("b", s["T_E102h"], np.full(n, pp.P_branch * KPA),
-                             np.tile(z_br, (n, 1)))
+            fb = self._flash(eos, "b", s["T_E102h"], xp.full((m, n), pp.P_branch * KPA),
+                             rows(z_br, n), keep)
             h_E102h, tk101, L101 = fb.h, None, 0.0
             F_exp, y_exp = V1 - F_bv, y1
             T_exp, P_exp = s["T_TK100"], pp.P_TK100
             L_to26 = L100 - F_bl
 
         # TE-100: expanded to the pressure of the stage it feeds.
-        P_exp_out = P_col[stages["expander"]]
-        h_in, s_in = self._vapour(T_exp, P_exp, y_exp)
-        iso = eos.flash_PS(np.array([P_exp_out * KPA]), np.array([s_in]), y_exp[None],
-                           T0=self._warm.get("iso_T", np.array([T_exp - 55.0])),
-                           K0=self._warm.get("iso_K"))
-        self._keep("iso_T", iso.T)
-        self._keep("iso_K", iso.K)
-        h_exp_out = h_in - pp.eta_machines * (h_in - iso.h[0])
+        P_exp_out = P_col[:, stages["expander"]]
+        h_in, s_in = self._vapour(eos, T_exp, P_exp, y_exp)
+        iso = eos.flash_PS(P_exp_out * KPA, s_in, y_exp,
+                           T0=self._start("iso_T", m, xp, default=T_exp - 55.0),
+                           K0=self._start("iso_K", m, xp))
+        if keep:
+            self._keep("iso_T", iso.T)
+            self._keep("iso_K", iso.K)
+        h_exp_out = h_in - pp.eta_machines * (h_in - iso.h)
         W_expander = F_exp * (h_in - h_exp_out)
 
         # T-100: the equilibrium first, since the crr recycle is overhead vapour.
-        eq = equilibrium(self.column, eos, s["x"], s["x_B"], s["P_top"] * KPA,
-                         T0=self._warm.get("column_T"))
-        self._keep("column_T", eq[1])
-        y0 = eq[2][0]
+        eq = equilibrium_batch(self.column, eos, s["x"], s["x_B"], s["P_top"] * KPA,
+                               T0=self._start("column_T", m, xp))
+        if keep:
+            self._keep("column_T", eq[1][0])
+        y0 = eq[2][:, 0]
         feeds = [Feed(stages["expander"], F_exp, y_exp, h_exp_out),
                  Feed(stages["TK100"], L_to26, s["x_TK100"], h_L100)]
         if scheme == "conventional":
             feeds.append(Feed(stages["TK101"], L101, s["x_TK101"],
-                              self._liquid_h(s["T_TK101"], pp.P_TK101, s["x_TK101"])))
+                              self._liquid_h(eos, s["T_TK101"], pp.P_TK101, s["x_TK101"])))
         elif scheme == "gsp":
-            feeds.append(Feed(stages["branch"], F_E102h, z_br, h_E102h[-1]))  # JTV-101
+            feeds.append(Feed(stages["branch"], F_E102h, z_br, h_E102h[:, -1]))  # JTV-101
 
         # crr: the branch through E-104's cold side to stage 2.
         if scheme == "crr":
-            P_E104c = P_col[stages["branch"]] + pp.dP_E104c
+            P_E104c = P_col[:, stages["branch"]] + pp.dP_E104c
             P_rec = s["P_top"] + pp.dP_K102
-            fr = self._flash("r", np.concatenate([s["T_E104h"], s["T_E104c"]]),
-                             np.concatenate([np.full(n, P_rec), np.full(n, P_E104c)]) * KPA,
-                             np.vstack([np.tile(y0, (n, 1)), np.tile(z_br, (n, 1))]))
-            h_E104h, h_E104c = fr.h[:n], fr.h[n:]
-            feeds.append(Feed(stages["branch"], F_E102h, z_br, h_E104c[0]))
+            fr = self._flash(eos, "r", xp.concatenate([s["T_E104h"], s["T_E104c"]], axis=1),
+                             xp.concatenate([rows(P_rec, n), rows(P_E104c, n)], axis=1) * KPA,
+                             xp.concatenate([rows(y0, n), rows(z_br, n)], axis=1), keep)
+            h_E104h, h_E104c = fr.h[:, :n], fr.h[:, n:]
+            feeds.append(Feed(stages["branch"], F_E102h, z_br, h_E104c[:, 0]))
 
         B = u.v_LCV102 * pp.F_LCV102_max
-        dM, dxs, dM_B, dx_B, col = evaluate(
+        dM, dxs, dM_B, dx_B, col = evaluate_batch(
             self.column, eos, s["M"], s["x"], s["M_B"], s["x_B"], s["P_top"] * KPA, feeds,
             Q_R=u.Q_reboiler * KW, B=B, eq=eq)
-        V_top, h_top = col.V[0], col.h_V[0]
+        V_top, h_top = col.V[:, 0], col.h_V[:, 0]
         if hold:
-            B = col.L[-1] - col.V[-1]
+            B = col.L[:, -1] - col.V[:, -1]
             implied["v_LCV102"] = B / pp.F_LCV102_max
             dM_B = 0.0  # the reboiler composition does not depend on the draw
 
@@ -361,7 +429,7 @@ class Plant:
         derivs = {}
         if scheme == "crr":
             r = (P_rec / s["P_top"]) ** ((pp.kappa_K102 - 1) / pp.kappa_K102) - 1
-            w_K102 = pp.cp_K102 * col.T[0] * r / pp.eta_machines  # kJ/kmol
+            w_K102 = pp.cp_K102 * col.T[:, 0] * r / pp.eta_machines  # kJ/kmol
             if hold:
                 # The recycle at ratio f to the residue gas, F_rec = f (V0 - F_rec) with
                 # V0 = V_top + F_rec, so F_rec = f V_top.
@@ -369,22 +437,22 @@ class Plant:
             W_K102 = implied["W_K102"] if hold else u.W_K102
             F_rec = W_K102 * KW / w_K102
             H_K102 = F_rec * w_K102
-            h_ov = (V_top * h_top + F_rec * h_E104h[-1]) / (V_top + F_rec)
+            h_ov = (V_top * h_top + F_rec * h_E104h[:, -1]) / (V_top + F_rec)
             derivs["T_E104h"], derivs["T_E104c"] = _exchanger(
                 s["T_E104h"], s["T_E104c"], h_E104h, h_E104c, F_rec, F_E102h,
-                h_ov + w_K102, h_E102h[-1], pp.UA_E104, pp.C_cell)
+                h_ov + w_K102, h_E102h[:, -1], pp.UA_E104, pp.C_cell)
         V0 = V_top + F_rec
 
         # Cold sides: E-102 then E-100, the residue gas's pressure falling through them.
         P_E102c = s["P_top"] - pp.dP_overhead / 2
         P_E100c = s["P_top"] - pp.dP_overhead
-        T_c = np.concatenate([s["T_E102c"], s["T_E100c"]])
-        P_c = np.concatenate([np.full(n, P_E102c), np.full(n, P_E100c)]) * KPA
-        fc = self._flash("c", T_c, P_c, np.tile(y0, (len(T_c), 1)))
-        h_E102c, h_E100c = fc.h[:n], fc.h[n:2 * n]
+        T_c = xp.concatenate([s["T_E102c"], s["T_E100c"]], axis=1)
+        P_c = xp.concatenate([rows(P_E102c, n), rows(P_E100c, n)], axis=1) * KPA
+        fc = self._flash(eos, "c", T_c, P_c, rows(y0, T_c.shape[1]), keep)
+        h_E102c, h_E100c = fc.h[:, :n], fc.h[:, n:2 * n]
         F_cold = V_top
         derivs["T_E100h"], derivs["T_E100c"] = _exchanger(
-            s["T_E100h"], s["T_E100c"], h_E100h, h_E100c, F, F_cold, h_feed, h_E102c[0],
+            s["T_E100h"], s["T_E100c"], h_E100h, h_E100c, F, F_cold, h_feed, h_E102c[:, 0],
             pp.UA_E100, pp.C_cell)
         derivs["T_E102h"], derivs["T_E102c"] = _exchanger(
             s["T_E102h"], s["T_E102c"], h_E102h, h_E102c, F_E102h, F_cold, h_br, h_ov,
@@ -393,20 +461,21 @@ class Plant:
         # Separators.
         derivs["T_TK100"] = F * (h_chiller_out - tk100.h) / pp.C_separator
         derivs["M_TK100"] = L_in100 - L100
-        derivs["x_TK100"] = L_in100 * (tk100.x - s["x_TK100"]) / s["M_TK100"]
+        derivs["x_TK100"] = L_in100[:, None] * (tk100.x - s["x_TK100"]) / s["M_TK100"][:, None]
         if scheme == "conventional":
-            derivs["T_TK101"] = V1 * (h_E102h[-1] - tk101.h) / pp.C_separator
+            derivs["T_TK101"] = V1 * (h_E102h[:, -1] - tk101.h) / pp.C_separator
             derivs["M_TK101"] = L_in101 - L101
-            derivs["x_TK101"] = L_in101 * (tk101.x - s["x_TK101"]) / s["M_TK101"]
+            derivs["x_TK101"] = (L_in101[:, None] * (tk101.x - s["x_TK101"])
+                                 / s["M_TK101"][:, None])
 
         # Recompression and the overhead pressure.
-        T1 = s["T_E100c"][0]
+        T1 = s["T_E100c"][:, 0]
         if hold:
             F_comp = F_cold
             implied["W_recompressor"] = self._recompression_power(W_expander, F_comp, T1,
                                                                   P_E100c) / KW
         W_K101 = implied["W_recompressor"] if hold else u.W_recompressor
-        F_comp, P2, T2, T3 = self._recompression(W_expander, W_K101 * KW, T1, P_E100c)
+        F_comp, P2, T2, T3 = self._recompression(W_expander, W_K101 * KW, T1, P_E100c, keep)
         derivs["P_top"] = (V_top - F_comp) / self.C_P
         if hold:
             derivs["P_top"] = 0.0
@@ -419,13 +488,14 @@ class Plant:
 
         dx_state = self.layout.pack(M=dM, x=dxs, M_B=dM_B, x_B=dx_B, **derivs)
         streams = Streams(
-            tk100=tk100, V1=V1, L100=L100, F_expander=F_exp, y_expander=y_exp,
-            T_expander_in=T_exp, P_expander_in=P_exp, h_expander_out=h_exp_out,
-            W_expander=W_expander, column=col, B=B, V0=V0, F_comp=F_comp,
-            P_booster_out=P2, T_booster_out=T2, T_K101_out=T3, tk101=tk101, L101=L101,
-            F_branch=F_E102h if scheme != "conventional" else 0.0, F_recycle=F_rec,
-            h_feed=h_feed, h_residue=h_E100c[0], Q_chiller=Q_chiller * KW, H_K102=H_K102,
-            h_overhead=h_ov, implied=implied)
+            tk100=tk100, V1=V1, L100=full(L100), F_expander=F_exp, y_expander=y_exp,
+            T_expander_in=full(T_exp), P_expander_in=full(P_exp), h_expander_out=h_exp_out,
+            W_expander=W_expander, column=col, B=full(B), V0=V0, F_comp=F_comp,
+            P_booster_out=P2, T_booster_out=T2, T_K101_out=T3, tk101=tk101, L101=full(L101),
+            F_branch=full(F_E102h if scheme != "conventional" else 0.0),
+            F_recycle=full(F_rec), h_feed=h_feed, h_residue=h_E100c[:, 0],
+            Q_chiller=full(Q_chiller * KW), H_K102=full(H_K102), h_overhead=h_ov,
+            implied={k: full(v) for k, v in implied.items()})
         return dx_state, streams
 
     # -- recompression -----------------------------------------------------------------
@@ -437,39 +507,44 @@ class Plant:
     #     W_booster = F cp_b T1 r_b / eta,     T2 = T1 (1 + r_b / eta)
     #     W_K101    = F cp_k T2 r_k / eta_k,   T3 = T2 (1 + r_k / eta_k)
 
-    def _recompression(self, W_booster, W_K101, T1, P1):
+    def _recompression(self, W_booster, W_K101, T1, P1, keep: bool = True):
         """The residue-gas flow at the given shaft powers (kJ/min), and the pressure and
         temperatures between the machines.  Eliminating F leaves one equation in P2,
         decreasing from +inf at P1 to -W_K101 at P_sales, solved by Newton in ln P2
-        inside that bracket."""
+        inside that bracket.  Each argument (m,), for the members of a batch, which
+        iterate together, each holding its value once its step has fallen below the
+        tolerance."""
         pp = self.pp
+        xp = namespace(T1)
         ab = (pp.kappa_booster - 1) / pp.kappa_booster
         ak = (pp.kappa_K101 - 1) / pp.kappa_K101
         eta, eta_k, Ps = pp.eta_machines, pp.eta_K101, pp.P_sales
         ratio = pp.cp_K101 / pp.cp_booster * eta / eta_k
+        log_Ps = float(np.log(Ps))  # a float, which combines with a device array
 
         def g(lnP2):
-            r1 = np.exp(ab * (lnP2 - np.log(P1))) - 1
-            r2 = np.exp(ak * (np.log(Ps) - lnP2)) - 1
+            r1 = xp.exp(ab * (lnP2 - xp.log(P1))) - 1
+            r2 = xp.exp(ak * (log_Ps - lnP2)) - 1
             return W_booster * ratio * (1 + r1 / eta) * r2 / r1 - W_K101
 
-        lo, hi = np.log(P1) + 1e-9, np.log(Ps) - 1e-9
-        v = min(max(self._warm.get("lnP2", 0.5 * (lo + hi)), lo), hi)
+        lo, hi = xp.log(P1) + 1e-9, log_Ps - 1e-9 + 0.0 * P1
+        v = self._start("lnP2", len(T1), xp, default=0.5 * (lo + hi))
+        v = xp.minimum(xp.maximum(v, lo), hi)
+        done = xp.zeros(v.shape, dtype=bool)
         for _ in range(100):
             gv = g(v)
-            if gv > 0:
-                lo = v
-            else:
-                hi = v
+            lo = xp.where(gv > 0, v, lo)
+            hi = xp.where(gv > 0, hi, v)
             new = v - gv / ((g(v + 1e-7) - gv) / 1e-7)
-            if not lo < new < hi:
-                new = 0.5 * (lo + hi)
-            if abs(new - v) < 1e-14:
-                v = new
+            new = xp.where((lo < new) & (new < hi), new, 0.5 * (lo + hi))
+            step_done = xp.abs(new - v) < 1e-14
+            v = xp.where(done, v, new)
+            done = done | step_done
+            if bool(done.all()):
                 break
-            v = new
-        self._keep("lnP2", v)
-        P2 = float(np.exp(v))
+        if keep:
+            self._keep("lnP2", v)
+        P2 = xp.exp(v)
         r1 = (P2 / P1) ** ab - 1
         F = W_booster * eta / (pp.cp_booster * T1 * r1)
         T2 = T1 * (1 + r1 / eta)
@@ -488,24 +563,47 @@ class Plant:
 
 
 def _input_key(u: Inputs) -> tuple:
-    return tuple(np.asarray(getattr(u, f.name), dtype=float).tobytes()
-                 for f in fields(u))
+    return tuple(to_host(np.asarray(0.0) if v is None else v).astype(float).tobytes()
+                 for v in (getattr(u, f.name) for f in fields(u)))
+
+
+def _same(a, b) -> bool:
+    """Whether two states, each one state or a batch, on the host or the device, are equal."""
+    xp = namespace(a)
+    return xp is namespace(b) and a.shape == b.shape and bool(xp.array_equal(a, b))
+
+
+@dataclass(frozen=True)
+class Row:
+    """One stream of a set of flashes: scalars and vectors for one evaluation, with a
+    leading axis of m for a batch."""
+
+    T: object
+    V: object
+    x: object
+    y: object
+    h: object
+    K: object
+
+    def member(self, i: int) -> Row:
+        return Row(**{k: v[i] for k, v in vars(self).items()})
 
 
 def _row(f, i):
-    """Row i of a Flash, as scalars and vectors."""
-    return type("Row", (), {"T": f.T[i], "V": f.V[i], "x": f.x[i], "y": f.y[i],
-                            "h": f.h[i], "K": f.K[i]})
+    """Stream i of a set of flashes whose arrays are (m, r, ...): (m,) and (m, n_c)."""
+    return Row(T=f.T[:, i], V=f.V[:, i], x=f.x[:, i], y=f.y[:, i], h=f.h[:, i], K=f.K[:, i])
 
 
 def _exchanger(T_h, T_c, h_h, h_c, F_h, F_c, h_h_in, h_c_in, UA, C_cell):
-    """Counter-current cells: the hot stream from cell 0 to n - 1, the cold from n - 1 to 0."""
-    n = len(T_h)
+    """Counter-current cells: the hot stream from cell 0 to n - 1, the cold from n - 1 to 0.
+    Temperatures and enthalpies (m, n); flows and inlet enthalpies (m,)."""
+    xp = namespace(T_h)
+    n = T_h.shape[-1]
     Q = UA / n * (T_h - T_c)
-    h_h_up = np.concatenate([[h_h_in], h_h[:-1]])
-    h_c_up = np.concatenate([h_c[1:], [h_c_in]])
-    dT_h = (F_h * (h_h_up - h_h) - Q) / C_cell
-    dT_c = (F_c * (h_c_up - h_c) + Q) / C_cell
+    h_h_up = xp.concatenate([h_h_in[:, None], h_h[:, :-1]], axis=1)
+    h_c_up = xp.concatenate([h_c[:, 1:], h_c_in[:, None]], axis=1)
+    dT_h = (F_h[:, None] * (h_h_up - h_h) - Q) / C_cell
+    dT_c = (F_c[:, None] * (h_c_up - h_c) + Q) / C_cell
     return dT_h, dT_c
 
 
@@ -522,6 +620,8 @@ class Design:
     x: np.ndarray
     u: Inputs
     plant: Plant
+    # The right-hand side and the measures accept a batch of states.
+    batched: ClassVar[bool] = True
 
     def rhs(self, t: float, x: np.ndarray, u: Inputs, pp: NGLParameters) -> np.ndarray:
         return self.plant.evaluate(x, u)[0]

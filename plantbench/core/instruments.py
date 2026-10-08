@@ -27,6 +27,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from plantbench.backend import clamp, namespace
+
 # Below this, a time constant or a deadtime is treated as absent rather than as a very
 # fast state, which would make the system needlessly stiff.
 NEGLIGIBLE = 1e-12
@@ -115,30 +117,33 @@ class Instrument:
         return np.asarray(s, dtype=float)
 
     def derivatives(self, states: np.ndarray, pv: float) -> np.ndarray:
-        """Time derivatives of the instrument states given the true process value."""
+        """Time derivatives of the instrument states given the true process value.
+
+        For a batch, `states` is (m, n_states) and `pv` (m,)."""
+        xp = namespace(states)
         if self.n_states == 0:
-            return np.zeros(0)
-        d = np.empty(self.n_states)
+            return xp.zeros(np.shape(pv) + (0,))
+        d = xp.empty(np.shape(pv) + (self.n_states,))
         i = 0
         v = pv
         if self.n_lag_states:
-            d[0] = (pv - states[0]) / self.tau
-            v = states[0]  # the deadtime sees the lagged signal
+            d[..., 0] = (pv - states[..., 0]) / self.tau
+            v = states[..., 0]  # the deadtime sees the lagged signal
             i = 1
         if self.n_delay_states:
-            z = states[i:]
+            z = states[..., i:]
             th = self.deadtime
             if self.method == "lags":
                 k = self.order / th
                 prev = v
                 for j in range(self.order):
-                    d[i + j] = (prev - z[j]) * k
-                    prev = z[j]
+                    d[..., i + j] = (prev - z[..., j]) * k
+                    prev = z[..., j]
             elif self.order == 1:
-                d[i] = -(2.0 / th) * z[0] + v
+                d[..., i] = -(2.0 / th) * z[..., 0] + v
             else:
-                d[i] = z[1]
-                d[i + 1] = -(12.0 / (th * th)) * z[0] - (6.0 / th) * z[1] + v
+                d[..., i] = z[..., 1]
+                d[..., i + 1] = -(12.0 / (th * th)) * z[..., 0] - (6.0 / th) * z[..., 1] + v
         return d
 
     def output(self, states: np.ndarray, pv: float) -> float:
@@ -148,18 +153,18 @@ class Instrument:
         i = 0
         v = pv
         if self.n_lag_states:
-            v = states[0]
+            v = states[..., 0]
             i = 1
         if self.n_delay_states:
-            z = states[i:]
+            z = states[..., i:]
             th = self.deadtime
             if self.method == "lags":
-                v = z[-1]
+                v = z[..., -1]
             elif self.order == 1:
-                v = -v + (4.0 / th) * z[0]
+                v = -v + (4.0 / th) * z[..., 0]
             else:
-                v = v - (12.0 / th) * z[1]
-        return float(v)
+                v = v - (12.0 / th) * z[..., 1]
+        return float(v) if np.ndim(v) == 0 else v
 
 
 @dataclass(frozen=True)
@@ -205,15 +210,18 @@ class Actuator:
         return np.zeros(0) if self.n_states == 0 else np.asarray([command], dtype=float)
 
     def derivatives(self, states: np.ndarray, command: float) -> np.ndarray:
+        xp = namespace(states)
         if self.n_states == 0:
-            return np.zeros(0)
-        rate = (command - states[0]) / self.tau
+            return xp.zeros(np.shape(command) + (0,))
+        rate = (command - states[..., 0]) / self.tau
         if np.isfinite(self.rate_limit):
-            rate = min(max(rate, -self.rate_limit), self.rate_limit)
-        return np.asarray([rate])
+            rate = clamp(rate, -self.rate_limit, self.rate_limit)
+        return xp.asarray(rate)[..., None]
 
     def output(self, states: np.ndarray, command: float) -> float:
-        return command if self.n_states == 0 else float(states[0])
+        if self.n_states == 0:
+            return command
+        return float(states[0]) if states.ndim == 1 else states[..., 0]
 
 
 IDEAL_INSTRUMENT = Instrument()

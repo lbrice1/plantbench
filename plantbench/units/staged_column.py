@@ -35,6 +35,8 @@ from typing import Protocol, Sequence
 
 import numpy as np
 
+from plantbench.backend import namespace
+
 from .column import weir_flow
 
 
@@ -60,9 +62,10 @@ class ColumnSpec:
 
     def pressures(self, P_top: float) -> np.ndarray:
         """The stage and reboiler pressures, Pa."""
+        xp = namespace(P_top)
         if self.P_offsets is not None:
-            return P_top + np.asarray(self.P_offsets, dtype=float)
-        return P_top + self.dP_stage * np.arange(self.n_stages + 1)
+            return P_top + xp.asarray(self.P_offsets, dtype=float)
+        return P_top + self.dP_stage * xp.arange(self.n_stages + 1)
 
 
 @dataclass(frozen=True)
@@ -104,9 +107,23 @@ def equilibrium(spec: ColumnSpec, thermo: Thermo, x, x_B, P_top: float, T0=None)
     """Stage and reboiler pressures, temperatures and vapour compositions: the part of
     `evaluate` that depends on the state alone, for a caller that needs the overhead
     vapour before it can compute the feeds."""
-    P = spec.pressures(P_top)
-    T, y = thermo.bubble_T(P, np.vstack([x, x_B[None]]), T0=T0)
-    return P, T, y
+    P, T, y = equilibrium_batch(spec, thermo, x[None], x_B[None], P_top,
+                                T0=None if T0 is None else T0[None])
+    return P[0], T[0], y[0]
+
+
+def equilibrium_batch(spec: ColumnSpec, thermo: Thermo, x, x_B, P_top, T0=None):
+    """`equilibrium` for m columns at once: x (m, n_stages, n_c), x_B (m, n_c), P_top a
+    scalar or (m,), T0 (m, n_stages + 1).  Returns P and T (m, n_stages + 1) and y
+    (m, n_stages + 1, n_c).  The stages of every column are solved as one set of rows."""
+    xp = namespace(x)
+    m, n, nc = x.shape
+    P = spec.pressures(xp.reshape(xp.asarray(P_top, dtype=float), (-1, 1)))
+    P = xp.broadcast_to(P, (m, n + 1))
+    x_all = xp.concatenate([x, x_B[:, None]], axis=1)
+    T, y = thermo.bubble_T(P.reshape(-1), x_all.reshape(-1, nc),
+                           T0=None if T0 is None else xp.reshape(T0, -1))
+    return P, T.reshape(m, n + 1), y.reshape(m, n + 1, nc)
 
 
 def evaluate(spec: ColumnSpec, thermo: Thermo, M, x, M_B, x_B, P_top: float,
@@ -122,38 +139,55 @@ def evaluate(spec: ColumnSpec, thermo: Thermo, M, x, M_B, x_B, P_top: float,
 
     Returns (dM, dx, dM_B, dx_B, profile).
     """
-    n, nc = spec.n_stages, spec.n_components
-    P, T, y = eq if eq is not None else equilibrium(spec, thermo, x, x_B, P_top, T0)
-    x_all = np.vstack([x, x_B[None]])
-    h_L = thermo.h(T, P, x_all, "liquid")
-    h_V = thermo.h(T, P, y, "vapour")
+    one = (lambda v: None if v is None else np.asarray(v, dtype=float)[None])
+    dM, dx, dM_B, dx_B, prof = evaluate_batch(
+        spec, thermo, one(M), one(x), one(M_B), one(x_B), P_top,
+        feeds, Q_R, B, T0=one(T0), eq=None if eq is None else tuple(one(v) for v in eq))
+    prof = Profile(**{k: v[0] for k, v in vars(prof).items()})
+    return dM[0], dx[0], dM_B[0], dx_B[0], prof
+
+
+def evaluate_batch(spec: ColumnSpec, thermo: Thermo, M, x, M_B, x_B, P_top,
+                   feeds: Sequence[Feed], Q_R, B, T0=None, eq=None):
+    """`evaluate` for m columns at once, each state with a leading axis of m: M (m, n),
+    x (m, n, n_c), M_B (m,), x_B (m, n_c).  `P_top`, `Q_R`, `B` and the flow and enthalpy
+    of each feed are scalars or (m,), a feed's composition (n_c,) or (m, n_c).  The
+    profile's arrays carry the same leading axis."""
+    xp = namespace(x)
+    m, n, nc = x.shape
+    P, T, y = eq if eq is not None else equilibrium_batch(spec, thermo, x, x_B, P_top, T0)
+    x_all = xp.concatenate([x, x_B[:, None]], axis=1)
+    h_L = thermo.h(T.reshape(-1), P.reshape(-1), x_all.reshape(-1, nc), "liquid").reshape(m, n + 1)
+    h_V = thermo.h(T.reshape(-1), P.reshape(-1), y.reshape(-1, nc), "vapour").reshape(m, n + 1)
 
     L = weir_flow(M, spec)  # leaving stage n for stage n + 1, the last into the reboiler
-    F = np.zeros(n)
-    Fz = np.zeros((n, nc))
-    Fh = np.zeros(n)
+    F = xp.zeros((m, n))
+    Fz = xp.zeros((m, n, nc))
+    Fh = xp.zeros((m, n))
     for f in feeds:
-        F[f.stage] += f.F
-        Fz[f.stage] += f.F * np.asarray(f.z)
-        Fh[f.stage] += f.F * f.h
+        Ff = xp.asarray(f.F, dtype=float)
+        F[:, f.stage] += Ff
+        Fz[:, f.stage] += Ff[..., None] * xp.asarray(f.z, dtype=float)
+        Fh[:, f.stage] += Ff * f.h
 
     # Vapour, from the reboiler up.  At each stage, with d(M h)/dt = h dM/dt,
     #   V_n (H_n - h_n) = V_{n+1} (H_{n+1} - h_n) + L_{n-1} (h_{n-1} - h_n) + sum F (h_F - h_n)
-    V = np.empty(n + 1)
-    V[n] = (Q_R + L[n - 1] * (h_L[n - 1] - h_L[n])) / (h_V[n] - h_L[n])
+    V = xp.empty((m, n + 1))
+    V[:, n] = (Q_R + L[:, n - 1] * (h_L[:, n - 1] - h_L[:, n])) / (h_V[:, n] - h_L[:, n])
     for k in range(n - 1, -1, -1):
-        above = L[k - 1] * (h_L[k - 1] - h_L[k]) if k > 0 else 0.0
-        V[k] = (V[k + 1] * (h_V[k + 1] - h_L[k]) + above + Fh[k] - F[k] * h_L[k]) \
-            / (h_V[k] - h_L[k])
+        above = L[:, k - 1] * (h_L[:, k - 1] - h_L[:, k]) if k > 0 else 0.0
+        V[:, k] = (V[:, k + 1] * (h_V[:, k + 1] - h_L[:, k]) + above + Fh[:, k]
+                   - F[:, k] * h_L[:, k]) / (h_V[:, k] - h_L[:, k])
 
-    L_in = np.concatenate([[0.0], L[:-1]])
-    x_in = np.vstack([np.zeros((1, nc)), x[:-1]])
-    dM = L_in + V[1:] + F - L - V[:n]
-    dMx = (L_in[:, None] * x_in + V[1:, None] * y[1:] + Fz
-           - L[:, None] * x - V[:n, None] * y[:n])
-    dx = (dMx - x * dM[:, None]) / M[:, None]
-    dM_B = L[-1] - V[n] - B
-    dx_B = (L[-1] * x[-1] - V[n] * y[n] - B * x_B - x_B * dM_B) / M_B
+    L_in = xp.concatenate([xp.zeros((m, 1)), L[:, :-1]], axis=1)
+    x_in = xp.concatenate([xp.zeros((m, 1, nc)), x[:, :-1]], axis=1)
+    dM = L_in + V[:, 1:] + F - L - V[:, :n]
+    dMx = (L_in[..., None] * x_in + V[:, 1:, None] * y[:, 1:] + Fz
+           - L[..., None] * x - V[:, :n, None] * y[:, :n])
+    dx = (dMx - x * dM[..., None]) / M[..., None]
+    dM_B = L[:, -1] - V[:, n] - B
+    dx_B = (L[:, -1, None] * x[:, -1] - V[:, n, None] * y[:, n] - (B * x_B.T).T
+            - x_B * dM_B[:, None]) / M_B[:, None]
     return dM, dx, dM_B, dx_B, Profile(T=T, P=P, y=y, h_L=h_L, h_V=h_V, L=L, V=V)
 
 

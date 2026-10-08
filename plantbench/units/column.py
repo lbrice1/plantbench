@@ -28,6 +28,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from plantbench.backend import namespace
+
 from .parameters import ColumnParameters
 
 N_SPECIES = 3
@@ -87,7 +89,8 @@ def weir_flow(M: np.ndarray, cp: ColumnParameters) -> np.ndarray:
     up below the feed tray on its own, and the clamp at zero keeps a tray that runs
     dry during a transient from producing a negative flow.
     """
-    return cp.weir_coeff * np.power(np.maximum(M - cp.holdup_weir, 0.0), 1.5)
+    xp = namespace(M)
+    return cp.weir_coeff * xp.power(xp.maximum(M - cp.holdup_weir, 0.0), 1.5)
 
 
 def rhs(

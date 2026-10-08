@@ -26,10 +26,12 @@ Units: K, Pa, J/mol (equal to kJ/kmol), mole fractions.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Sequence
 
 import numpy as np
+
+from plantbench.backend import namespace, to_device
 
 R = 8.314462618  # J/(mol K)
 T_REF = 298.15  # K, ideal-gas enthalpy and entropy reference
@@ -66,6 +68,16 @@ class Components:
     def n(self) -> int:
         return len(self.names)
 
+    @property
+    def xp(self):
+        """The array module the constants live in: NumPy, or CuPy after `on("cuda")`."""
+        return namespace(self.Tc)
+
+    def on(self, device: str) -> Components:
+        """A copy with every constant array on `device`."""
+        arrays = ("Tc", "Pc", "omega", "kij", "T_nodes", "H_nodes", "Cp_nodes", "S_nodes")
+        return replace(self, **{k: to_device(getattr(self, k), device) for k in arrays})
+
     @classmethod
     def from_names(cls, names: Sequence[str]) -> Components:
         from thermo import ChemicalConstantsPackage
@@ -98,13 +110,14 @@ class Components:
         return comps
 
     def _hermite(self, T, values, slopes):
-        T = np.asarray(T, dtype=float)
-        if np.any(T < self.T_nodes[0]) or np.any(T > self.T_nodes[-1]):
+        xp = self.xp
+        T = xp.asarray(T, dtype=float)
+        if xp.any(T < self.T_nodes[0]) or xp.any(T > self.T_nodes[-1]):
             raise ValueError(
                 f"temperature outside the enthalpy table, "
-                f"{self.T_nodes[0]:g} to {self.T_nodes[-1]:g} K"
+                f"{float(self.T_nodes[0]):g} to {float(self.T_nodes[-1]):g} K"
             )
-        i = np.clip(np.searchsorted(self.T_nodes, T) - 1, 0, len(self.T_nodes) - 2)
+        i = xp.clip(xp.searchsorted(self.T_nodes, T) - 1, 0, len(self.T_nodes) - 2)
         h = self.T_nodes[i + 1] - self.T_nodes[i]
         s = ((T - self.T_nodes[i]) / h)[:, None]
         h00, h10 = 2 * s**3 - 3 * s**2 + 1, s**3 - 2 * s**2 + s
@@ -142,54 +155,77 @@ class Components:
 
 class PengRobinson:
     """The Peng–Robinson equation on a component set, every method vectorised over a
-    leading axis of states (stages): T and P of shape (N,), compositions (N, n_c)."""
+    leading axis of states (stages): T and P of shape (N,), compositions (N, n_c).
 
-    def __init__(self, comps: Components):
+    `roots` chooses how the cubic is solved: "eigen", as the eigenvalues of its companion
+    matrix, or "closed", by the trigonometric and Cardano formulas.  Both are polished by
+    the same two Newton steps and agree to round-off.  "eigen" is the default and what
+    the published results were produced with.  "closed" costs the same on the few rows of
+    one column and about 2.4 times less per row on the thousands of rows of a batch, and
+    it is the one a GPU can run; `on` chooses it.
+    """
+
+    def __init__(self, comps: Components, roots: str = "eigen"):
+        if roots not in ("eigen", "closed"):
+            raise ValueError(f"roots must be 'eigen' or 'closed', not {roots!r}")
         self.c = comps
+        self.roots = roots
+        self.xp = comps.xp
         self.b_i = OMEGA_B * R * comps.Tc / comps.Pc
         self.ac_i = OMEGA_A * (R * comps.Tc) ** 2 / comps.Pc
         w = comps.omega
         self.m_i = 0.37464 + 1.54226 * w - 0.26992 * w**2
         self.one_minus_k = 1.0 - comps.kij
 
+    def on(self, device: str, roots: str = "closed") -> PengRobinson:
+        """The same equation with its constants on `device`, for the batched path."""
+        return PengRobinson(self.c.on(device), roots=roots)
+
     # -- pure and mixture parameters -------------------------------------------------
 
     def _a_i(self, T):
         """a_i(T) and da_i/dT, each (N, n_c)."""
-        sTr = np.sqrt(T[:, None] / self.c.Tc)
+        xp = self.xp
+        sTr = xp.sqrt(T[:, None] / self.c.Tc)
         root = 1.0 + self.m_i * (1.0 - sTr)
         a = self.ac_i * root**2
-        da = -self.ac_i * self.m_i * root / np.sqrt(T[:, None] * self.c.Tc)
+        da = -self.ac_i * self.m_i * root / xp.sqrt(T[:, None] * self.c.Tc)
         return a, da
 
     def _mixture(self, T, x):
+        xp = self.xp
         a_i, da_i = self._a_i(T)
-        sq = np.sqrt(a_i)
+        sq = xp.sqrt(a_i)
         a_ij = sq[:, :, None] * sq[:, None, :] * self.one_minus_k  # (N, n_c, n_c)
-        sum_j = np.einsum("nij,nj->ni", a_ij, x)  # sum_j x_j a_ij
-        a = np.einsum("ni,ni->n", x, sum_j)
+        sum_j = xp.einsum("nij,nj->ni", a_ij, x)  # sum_j x_j a_ij
+        a = xp.einsum("ni,ni->n", x, sum_j)
         # d a_ij/dT = a_ij / 2 (a_i'/a_i + a_j'/a_j)
         r = da_i / a_i
-        da = 0.5 * np.einsum("ni,nj,nij->n", x, x, a_ij * (r[:, :, None] + r[:, None, :]))
+        da = 0.5 * xp.einsum("ni,nj,nij->n", x, x, a_ij * (r[:, :, None] + r[:, None, :]))
         b = x @ self.b_i
         return a, da, b, sum_j
 
     # -- the cubic -------------------------------------------------------------------
 
-    @staticmethod
-    def _Z(A, B, phase: str):
+    def _Z(self, A, B, phase: str):
         """The compressibility root of the phase: the smallest real root above B for a
         liquid, the largest for a vapour.  Where one real root exists it serves both."""
+        xp = self.xp
         c2 = -(1.0 - B)
         c1 = A - 3.0 * B**2 - 2.0 * B
         c0 = -(A * B - B**2 - B**3)
-        n = len(A)
-        comp = np.zeros((n, 3, 3))
-        comp[:, 0, :] = np.stack([-c2, -c1, -c0], axis=1)
-        comp[:, 1, 0] = comp[:, 2, 1] = 1.0
-        roots = np.linalg.eigvals(comp)
-        real = np.where((np.abs(roots.imag) < 1e-9) & (roots.real > B[:, None]), roots.real, np.nan)
-        Z = np.nanmin(real, axis=1) if phase == "liquid" else np.nanmax(real, axis=1)
+        if self.roots == "eigen":
+            n = len(A)
+            comp = xp.zeros((n, 3, 3))
+            comp[:, 0, :] = xp.stack([-c2, -c1, -c0], axis=1)
+            comp[:, 1, 0] = comp[:, 2, 1] = 1.0
+            roots = xp.linalg.eigvals(comp)
+            real = xp.where((xp.abs(roots.imag) < 1e-9) & (roots.real > B[:, None]),
+                            roots.real, xp.nan)
+        else:
+            real = _cubic_real_roots(c2, c1, c0)
+            real = xp.where(real > B[:, None], real, xp.nan)
+        Z = xp.nanmin(real, axis=1) if phase == "liquid" else xp.nanmax(real, axis=1)
         # Polish on the cubic itself: the eigenvalues carry round-off that finite-
         # difference Jacobians of the right-hand side would see as noise.
         for _ in range(2):
@@ -198,28 +234,31 @@ class PengRobinson:
         return Z
 
     def _state(self, T, P, x, phase):
+        xp = self.xp
         a, da, b, sum_j = self._mixture(T, x)
         A = a * P / (R * T) ** 2
         B = b * P / (R * T)
         Z = self._Z(A, B, phase)
-        L = np.log((Z + (1.0 + SQRT2) * B) / (Z + (1.0 - SQRT2) * B))
+        L = xp.log((Z + (1.0 + SQRT2) * B) / (Z + (1.0 - SQRT2) * B))
         return a, da, b, sum_j, A, B, Z, L
 
     # -- properties ------------------------------------------------------------------
 
     def ln_phi(self, T, P, x, phase: str):
         """Log fugacity coefficients, (N, n_c)."""
+        xp = self.xp
         a, _, b, sum_j, A, B, Z, L = self._state(T, P, x, phase)
         bi_b = self.b_i / b[:, None]
         return (
             bi_b * (Z - 1.0)[:, None]
-            - np.log(Z - B)[:, None]
+            - xp.log(Z - B)[:, None]
             - (A / (2.0 * SQRT2 * B))[:, None] * (2.0 * sum_j / a[:, None] - bi_b) * L[:, None]
         )
 
     def h_ideal(self, T, x):
         """Ideal-gas enthalpy relative to the ideal gas at T_REF, J/mol, (N,)."""
-        return np.einsum("ni,ni->n", x, self.c.h_ideal_pure(T))
+        xp = self.xp
+        return xp.einsum("ni,ni->n", x, self.c.h_ideal_pure(T))
 
     def h_departure(self, T, P, x, phase: str):
         a, da, b, _, _, B, Z, L = self._state(T, P, x, phase)
@@ -232,16 +271,18 @@ class PengRobinson:
     def s_ideal(self, T, P, x):
         """Ideal-gas entropy of the mixture relative to the pure ideal gases at T_REF and
         P_REF, mixing included, J/(mol K), (N,)."""
-        xs = np.where(x > 0, x, 1.0)
+        xp = self.xp
+        xs = xp.where(x > 0, x, 1.0)
         return (
-            np.einsum("ni,ni->n", x, self.c.s_ideal_pure(T))
-            - R * np.log(P / P_REF)
-            - R * np.einsum("ni,ni->n", x, np.log(xs))
+            xp.einsum("ni,ni->n", x, self.c.s_ideal_pure(T))
+            - R * xp.log(P / P_REF)
+            - R * xp.einsum("ni,ni->n", x, xp.log(xs))
         )
 
     def s_departure(self, T, P, x, phase: str):
+        xp = self.xp
         a, da, b, _, _, B, Z, L = self._state(T, P, x, phase)
-        return R * np.log(Z - B) + da / (2.0 * SQRT2 * b) * L
+        return R * xp.log(Z - B) + da / (2.0 * SQRT2 * b) * L
 
     def s(self, T, P, x, phase: str):
         """Molar entropy of the phase, J/(mol K), (N,)."""
@@ -249,10 +290,12 @@ class PengRobinson:
 
     def K(self, T, P, x, y):
         """Equilibrium ratios for liquid x and vapour y, (N, n_c)."""
-        return np.exp(self.ln_phi(T, P, x, "liquid") - self.ln_phi(T, P, y, "vapour"))
+        xp = self.xp
+        return xp.exp(self.ln_phi(T, P, x, "liquid") - self.ln_phi(T, P, y, "vapour"))
 
     def wilson_K(self, T, P):
-        return (self.c.Pc / P[:, None]) * np.exp(
+        xp = self.xp
+        return (self.c.Pc / P[:, None]) * xp.exp(
             5.373 * (1.0 + self.c.omega) * (1.0 - self.c.Tc / T[:, None])
         )
 
@@ -266,9 +309,10 @@ class PengRobinson:
         `tol` in ln(sum K x) and in the relative step of T, so that the result is smooth
         enough to difference.
         """
-        P = np.asarray(P, dtype=float)
-        x = np.asarray(x, dtype=float)
-        T = self._wilson_bubble(P, x) if T0 is None else np.array(T0, dtype=float)
+        xp = self.xp
+        P = xp.asarray(P, dtype=float)
+        x = xp.asarray(x, dtype=float)
+        T = self._wilson_bubble(P, x) if T0 is None else xp.array(T0, dtype=float)
         K = self.wilson_K(T, P)
         y = K * x
         y /= y.sum(axis=1, keepdims=True)
@@ -276,32 +320,33 @@ class PengRobinson:
         for _ in range(max_iter):
             K = self.K(T, P, x, y)
             s = (K * x).sum(axis=1)
-            f = np.log(s)
+            f = xp.log(s)
             y = K * x / s[:, None]
             Kp = self.K(T + dT, P, x, y)
-            fp = np.log((Kp * x).sum(axis=1))
+            fp = xp.log((Kp * x).sum(axis=1))
             step = -f / ((fp - f) / dT)
-            step = np.clip(step, -20.0, 20.0)
+            step = xp.clip(step, -20.0, 20.0)
             T = T + step
-            if np.all(np.abs(f) < tol) and np.all(np.abs(step) < tol * T):
+            if xp.all(xp.abs(f) < tol) and xp.all(xp.abs(step) < tol * T):
                 break
         else:
-            raise RuntimeError(f"bubble point did not converge: |f| {np.max(np.abs(f)):.3g}")
+            raise RuntimeError(f"bubble point did not converge: |f| {float(xp.max(xp.abs(f))):.3g}")
         K = self.K(T, P, x, y)
         y = K * x / (K * x).sum(axis=1, keepdims=True)
-        if np.any(np.max(np.abs(y - x), axis=1) < 1e-6):
+        if xp.any(xp.max(xp.abs(y - x), axis=1) < 1e-6):
             raise RuntimeError("bubble point converged to the trivial solution y = x")
         return T, y
 
     def _wilson_bubble(self, P, x):
         """The Wilson-K bubble temperature, by bisection on sum K x = 1."""
-        lo = np.full(len(P), 60.0)
-        hi = np.full(len(P), 700.0)
+        xp = self.xp
+        lo = xp.full(len(P), 60.0)
+        hi = xp.full(len(P), 700.0)
         for _ in range(60):
             mid = 0.5 * (lo + hi)
             over = (self.wilson_K(mid, P) * x).sum(axis=1) > 1.0
-            hi = np.where(over, mid, hi)
-            lo = np.where(over, lo, mid)
+            hi = xp.where(over, mid, hi)
+            lo = xp.where(over, lo, mid)
         return 0.5 * (lo + hi)
 
     # -- flashes ---------------------------------------------------------------------
@@ -320,82 +365,87 @@ class PengRobinson:
         Returns the `Flash` of each row: vapour fraction clipped to [0, 1], phase
         compositions, K-values and the molar enthalpy and entropy of the whole.
         """
-        T = np.asarray(T, dtype=float)
-        P = np.asarray(P, dtype=float)
-        z = np.asarray(z, dtype=float)
-        lnK = np.log(self.wilson_K(T, P) if K0 is None else np.array(K0, dtype=float))
-        beta = np.full(len(T), 0.5)
-        active = np.ones(len(T), dtype=bool)
+        xp = self.xp
+        T = xp.asarray(T, dtype=float)
+        P = xp.asarray(P, dtype=float)
+        z = xp.asarray(z, dtype=float)
+        lnK = xp.log(self.wilson_K(T, P) if K0 is None else xp.array(K0, dtype=float))
+        beta = xp.full(len(T), 0.5)
+        active = xp.ones(len(T), dtype=bool)
         for _ in range(max_iter):
-            idx = np.flatnonzero(active)
-            beta[idx] = _rachford_rice(z[idx], np.exp(lnK[idx]), beta[idx])
+            idx = xp.flatnonzero(active)
+            beta[idx] = _rachford_rice(z[idx], xp.exp(lnK[idx]), beta[idx])
             new = self._substitute(T[idx], P[idx], z[idx], lnK[idx], beta[idx])
-            change = np.max(np.abs(new - lnK[idx]), axis=1)
+            change = xp.max(xp.abs(new - lnK[idx]), axis=1)
             lnK[idx] = new
             b = beta[idx]
             # Far outside [0, 1] the phase is settled.  Near [0, 1], substitution slows as
             # a phase boundary approaches, so Newton finishes the row, the negative flash
             # telling afterwards whether it is one phase or two.
             one_phase = (b < -0.01) | (b > 1.01)
-            trivial = np.max(np.abs(new), axis=1) < 1e-4
+            trivial = xp.max(xp.abs(new), axis=1) < 1e-4
             close = ~one_phase & ~trivial & (change < 1e-3)
-            if np.any(close):
+            if xp.any(close):
                 c = idx[close]
                 lnK[c], beta[c] = self._newton(T[c], P[c], z[c], lnK[c], beta[c], tol)
             active[idx[one_phase | trivial | close | (change < tol)]] = False
             if not active.any():
                 break
         else:
-            raise RuntimeError(f"PT flash did not converge: change in ln K {np.max(change):.3g}")
-        K = np.exp(lnK)
+            raise RuntimeError(f"PT flash did not converge: change in ln K {float(xp.max(change)):.3g}")
+        K = xp.exp(lnK)
         beta = _rachford_rice(z, K, beta)
         return self._result(T, P, z, K, beta)
 
     def _substitute(self, T, P, z, lnK, beta):
         """One step of successive substitution: ln K from the phases ln K gives."""
-        x, y = _phases(z, np.exp(lnK), beta)
+        xp = self.xp
+        x, y = _phases(z, xp.exp(lnK), beta)
         return self.ln_phi(T, P, x, "liquid") - self.ln_phi(T, P, y, "vapour")
 
     def _newton(self, T, P, z, lnK, beta, tol, max_iter: int = 8):
         """Newton on g(ln K) = ln K - substitute(ln K) = 0, its Jacobian by forward
         differences evaluated as extra rows of one batch."""
+        xp = self.xp
         n, nc = lnK.shape
         eps = 1e-7
         for _ in range(max_iter):
-            rows = np.concatenate([lnK[None], lnK[None] + eps * np.eye(nc)[:, None, :]])
+            rows = xp.concatenate([lnK[None], lnK[None] + eps * xp.eye(nc)[:, None, :]])
             rows = rows.reshape(-1, nc)  # (nc + 1) blocks of n rows
-            rep = lambda v: np.tile(v, (nc + 1,) + (1,) * (v.ndim - 1))  # noqa: E731
+            rep = lambda v: xp.tile(v, (nc + 1,) + (1,) * (v.ndim - 1))  # noqa: E731
             zb = rep(z)
-            Kb = np.exp(rows)
+            Kb = xp.exp(rows)
             bb = _rachford_rice(zb, Kb, rep(beta))
             g = (rows - self._substitute(rep(T), rep(P), zb, rows, bb)).reshape(nc + 1, n, nc)
-            J = np.transpose((g[1:] - g[0]) / eps, (1, 2, 0))  # (n, nc, nc): dg_i/dlnK_j
-            step = np.linalg.solve(J, -g[0][:, :, None])[:, :, 0]
+            J = xp.transpose((g[1:] - g[0]) / eps, (1, 2, 0))  # (n, nc, nc): dg_i/dlnK_j
+            step = xp.linalg.solve(J, -g[0][:, :, None])[:, :, 0]
             lnK = lnK + step
             beta = bb[:n]
-            if np.max(np.abs(step)) < tol:
+            if xp.max(xp.abs(step)) < tol:
                 break
-        return lnK, _rachford_rice(z, np.exp(lnK), beta)
+        return lnK, _rachford_rice(z, xp.exp(lnK), beta)
 
     def _result(self, T, P, z, K, beta) -> Flash:
+        xp = self.xp
         x, y = _phases(z, K, beta)
         # A row that is one phase, or that converged to the trivial solution K = 1, is
         # all liquid or all vapour: labelled by the fraction the negative flash gives, and
         # for the trivial solution by which root is the more stable.
-        trivial = np.max(np.abs(np.log(K)), axis=1) < 1e-4
+        trivial = xp.max(xp.abs(xp.log(K)), axis=1) < 1e-4
         liquid = (beta <= 0.0) | (trivial & self._liquid_like(T, P, z))
         vapour = (beta >= 1.0) | (trivial & ~liquid)
-        V = np.where(liquid, 0.0, np.where(vapour, 1.0, beta))
-        x = np.where(liquid[:, None], z, x)
-        y = np.where(vapour[:, None], z, y)
+        V = xp.where(liquid, 0.0, xp.where(vapour, 1.0, beta))
+        x = xp.where(liquid[:, None], z, x)
+        y = xp.where(vapour[:, None], z, y)
         h = (1 - V) * self.h(T, P, x, "liquid") + V * self.h(T, P, y, "vapour")
         s = (1 - V) * self.s(T, P, x, "liquid") + V * self.s(T, P, y, "vapour")
         return Flash(T=T, P=P, V=V, x=x, y=y, K=K, h=h, s=s)
 
     def _liquid_like(self, T, P, z):
         """Where one phase: whether the liquid root has the lower Gibbs energy."""
-        gL = np.einsum("ni,ni->n", z, self.ln_phi(T, P, z, "liquid"))
-        gV = np.einsum("ni,ni->n", z, self.ln_phi(T, P, z, "vapour"))
+        xp = self.xp
+        gL = xp.einsum("ni,ni->n", z, self.ln_phi(T, P, z, "liquid"))
+        gV = xp.einsum("ni,ni->n", z, self.ln_phi(T, P, z, "vapour"))
         return gL < gV - 1e-12
 
     def _flash_P(self, P, z, target, value, T0, K0, tol, max_iter):
@@ -404,47 +454,50 @@ class PengRobinson:
         flashed in one batch, kept inside a bracket once the residual has changed sign and
         bisecting when a step leaves it.  The property has a kink at each phase boundary,
         where Newton alone oscillates."""
-        P = np.asarray(P, dtype=float)
-        z = np.asarray(z, dtype=float)
-        T = np.array(T0, dtype=float)
+        xp = self.xp
+        P = xp.asarray(P, dtype=float)
+        z = xp.asarray(z, dtype=float)
+        T = xp.array(T0, dtype=float)
         n = len(T)
-        lo = np.full_like(T, -np.inf)
-        hi = np.full_like(T, np.inf)
-        K = None if K0 is None else np.asarray(K0, dtype=float)
+        lo = xp.full_like(T, -xp.inf)
+        hi = xp.full_like(T, xp.inf)
+        K = None if K0 is None else xp.asarray(K0, dtype=float)
         dT = 1e-4
         for _ in range(max_iter):
             both = self.flash_PT(
-                np.concatenate([T, T + dT]),
-                np.concatenate([P, P]),
-                np.concatenate([z, z]),
-                K0=None if K is None else np.concatenate([K, K]),
+                xp.concatenate([T, T + dT]),
+                xp.concatenate([P, P]),
+                xp.concatenate([z, z]),
+                K0=None if K is None else xp.concatenate([K, K]),
             )
             f0, f1 = getattr(both, target)[:n], getattr(both, target)[n:]
             r = f0 - value
-            lo = np.where(r < 0, T, lo)
-            hi = np.where(r > 0, T, hi)
-            new = T - np.clip(r / ((f1 - f0) / dT), -30.0, 30.0)
-            bracketed = np.isfinite(lo) & np.isfinite(hi)
+            lo = xp.where(r < 0, T, lo)
+            hi = xp.where(r > 0, T, hi)
+            new = T - xp.clip(r / ((f1 - f0) / dT), -30.0, 30.0)
+            bracketed = xp.isfinite(lo) & xp.isfinite(hi)
             outside = bracketed & ((new <= lo) | (new >= hi))
-            mid = 0.5 * (np.where(bracketed, lo, 0.0) + np.where(bracketed, hi, 0.0))
-            new = np.where(outside, mid, new)
-            new = np.maximum(new, self.c.T_nodes[0] + 1.0)
+            mid = 0.5 * (xp.where(bracketed, lo, 0.0) + xp.where(bracketed, hi, 0.0))
+            new = xp.where(outside, mid, new)
+            new = xp.maximum(new, self.c.T_nodes[0] + 1.0)
             step = new - T
             T = new
             K = both.K[:n]
-            if np.all(np.abs(step) < tol * T):
+            if xp.all(xp.abs(step) < tol * T):
                 return self.flash_PT(T, P, z, K0=K)
         raise RuntimeError(
-            f"P{target.upper()} flash did not converge: step {np.max(np.abs(step)):.3g} K"
+            f"P{target.upper()} flash did not converge: step {float(xp.max(xp.abs(step))):.3g} K"
         )
 
     def flash_PH(self, P, h, z, T0, K0=None, tol: float = 1e-11, max_iter: int = 60):
         """Flash at pressure and molar enthalpy: a valve, or a stream given a duty."""
-        return self._flash_P(P, z, "h", np.asarray(h, dtype=float), T0, K0, tol, max_iter)
+        xp = self.xp
+        return self._flash_P(P, z, "h", xp.asarray(h, dtype=float), T0, K0, tol, max_iter)
 
     def flash_PS(self, P, s, z, T0, K0=None, tol: float = 1e-11, max_iter: int = 60):
         """Flash at pressure and molar entropy: the isentropic outlet of a machine."""
-        return self._flash_P(P, z, "s", np.asarray(s, dtype=float), T0, K0, tol, max_iter)
+        xp = self.xp
+        return self._flash_P(P, z, "s", xp.asarray(s, dtype=float), T0, K0, tol, max_iter)
 
 
 @dataclass(frozen=True, eq=False)
@@ -475,27 +528,54 @@ def _rachford_rice(z, K, beta0, tol: float = 1e-14, max_iter: int = 100):
     inside the interval where every denominator is positive, which extends beyond [0, 1]
     for the negative flash.  A row whose K are all above 1 has no root and is all vapour
     (returned as 2); all below 1, all liquid (returned as -1)."""
+    xp = namespace(z)
     Km1 = K - 1.0
     Kmax, Kmin = K.max(axis=1), K.min(axis=1)
-    beta = np.where(Kmax <= 1.0, -1.0, np.where(Kmin >= 1.0, 2.0, np.asarray(beta0, float)))
-    rows = np.flatnonzero((Kmax > 1.0) & (Kmin < 1.0))
+    beta = xp.where(Kmax <= 1.0, -1.0, xp.where(Kmin >= 1.0, 2.0, xp.asarray(beta0, float)))
+    rows = xp.flatnonzero((Kmax > 1.0) & (Kmin < 1.0))
     if len(rows) == 0:
         return beta
     zr, Kr = z[rows], Km1[rows]
     lo = 1.0 / (1.0 - Kmax[rows])
     hi = 1.0 / (1.0 - Kmin[rows])
-    b = np.clip(beta[rows], lo + 1e-9 * (hi - lo), hi - 1e-9 * (hi - lo))
+    b = xp.clip(beta[rows], lo + 1e-9 * (hi - lo), hi - 1e-9 * (hi - lo))
     for _ in range(max_iter):
         d = 1.0 + b[:, None] * Kr
-        f = np.sum(zr * Kr / d, axis=1)
-        df = -np.sum(zr * Kr**2 / d**2, axis=1)
-        lo = np.where(f > 0, b, lo)
-        hi = np.where(f < 0, b, hi)
+        f = xp.sum(zr * Kr / d, axis=1)
+        df = -xp.sum(zr * Kr**2 / d**2, axis=1)
+        lo = xp.where(f > 0, b, lo)
+        hi = xp.where(f < 0, b, hi)
         new = b - f / df
-        new = np.where((new <= lo) | (new >= hi), 0.5 * (lo + hi), new)
-        done = np.abs(new - b) <= tol * (1.0 + np.abs(b))
+        new = xp.where((new <= lo) | (new >= hi), 0.5 * (lo + hi), new)
+        done = xp.abs(new - b) <= tol * (1.0 + xp.abs(b))
         b = new
-        if np.all(done):
+        if xp.all(done):
             break
     beta[rows] = b
     return beta
+
+
+def _cubic_real_roots(c2, c1, c0):
+    """The real roots of Z^3 + c2 Z^2 + c1 Z + c0 = 0, one row per cubic, (N, 3).
+
+    The cubic is depressed to t^3 + p t + q = 0 by Z = t - c2 / 3.  Where it has three
+    real roots (discriminant at most zero) they are given by the trigonometric formula;
+    where it has one, by Cardano's, repeated in all three columns.  The roots carry
+    round-off from the cancellation in Cardano's formula, which the Newton polish of
+    `PengRobinson._Z` removes.
+    """
+    xp = namespace(c2)
+    shift = c2 / 3.0
+    p = c1 - c2 * shift
+    q = 2.0 * shift**3 - shift * c1 + c0
+    disc = (q / 2.0) ** 2 + (p / 3.0) ** 3
+    sq = xp.sqrt(xp.maximum(disc, 0.0))
+    one = xp.cbrt(-q / 2.0 + sq) + xp.cbrt(-q / 2.0 - sq) - shift
+    # Three real roots need p < 0; elsewhere the value is discarded, and the bound only
+    # keeps the arithmetic finite.
+    pn = xp.minimum(p, -1e-300)
+    r = 2.0 * xp.sqrt(-pn / 3.0)
+    theta = xp.arccos(xp.clip(3.0 * q / (pn * r), -1.0, 1.0)) / 3.0
+    k = 2.0 * np.pi / 3.0 * xp.arange(3)
+    three = r[:, None] * xp.cos(theta[:, None] - k) - shift[:, None]
+    return xp.where((disc > 0.0)[:, None], one[:, None], three)

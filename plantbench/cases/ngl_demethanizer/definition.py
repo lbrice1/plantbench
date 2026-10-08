@@ -22,9 +22,10 @@ import dataclasses
 
 import numpy as np
 
+from plantbench.backend import namespace
 from plantbench.core import control as ctl
 from plantbench.core.case import Case, Config, override
-from plantbench.core.casekit import cached_design
+from plantbench.core.casekit import cached_design, measured
 
 from . import design_starts
 from .model import SCHEMES, Design, Plant, solve_design
@@ -71,6 +72,7 @@ def make_design(config: Config) -> Design:
 
 
 def measurements(design: Design) -> dict:
+    """The measures, each of one state or of a batch (`casekit.measured`)."""
     plant, pp = design.plant, design.pp
     lay = plant.layout
     i = {name: lay.slices[name] for name in lay.shapes}
@@ -82,49 +84,55 @@ def measurements(design: Design) -> dict:
 
     def state(name):
         k = i[name].start
-        return lambda x, u, pp: float(x[k])
+        return lambda x, u, pp: measured(x[..., k])
 
     def state_kmol_h(name):
         k = i[name].start
-        return lambda x, u, pp: float(60.0 * x[k])
+        return lambda x, u, pp: measured(60.0 * x[..., k])
 
     def level(name, full):
         k = i[name].start
-        return lambda x, u, pp: float(100.0 * x[k] / full)
+        return lambda x, u, pp: measured(100.0 * x[..., k] / full)
 
     m = {
         "feed flow": lambda x, u, pp: 60.0 * u.F_feed,  # kmol/h
-        "TK-100 temperature": lambda x, u, pp: float(x[i["T_TK100"].start] - C),
+        "TK-100 temperature": lambda x, u, pp: measured(x[..., i["T_TK100"].start] - C),
         "TK-100 level": level("M_TK100", pp.M_TK100_design / pp.level_TK100_design),  # %
         "reboiler level": level("M_B", 2 * pp.M_reboiler_design),
         "overhead pressure": state("P_top"),  # kPa
-        "methane in NGL": lambda x, u, pp: float(100.0 * x[i["x_B"]][C1]),  # mol %
+        "methane in NGL": lambda x, u, pp: measured(100.0 * x[..., i["x_B"]][..., C1]),  # mol %
         # ERIC-100: the NGL flow transmitter and the analysers on the feed and the NGL
-        "ethane recovery": lambda x, u, pp: float(
-            x[i["FT_NGL"].start] * x[i["x_B"]][C2] / (u.F_feed * u.z_feed[C2])),
+        "ethane recovery": lambda x, u, pp: measured(
+            x[..., i["FT_NGL"].start] * x[..., i["x_B"]][..., C2]
+            / (u.F_feed * u.z_feed[..., C2])),
         "NGL flow": state_kmol_h("FT_NGL"),
-        "NGL temperature": lambda x, u, pp: float(streams(x, u).column.T[-1] - C),
+        "NGL temperature": lambda x, u, pp: measured(streams(x, u).column.T[..., -1] - C),
         "expander flow": lambda x, u, pp: 60.0 * streams(x, u).F_expander,  # kmol/h
         "expander power": lambda x, u, pp: streams(x, u).W_expander / 60.0,  # kW
-        "E-100 hot outlet temperature": lambda x, u, pp: float(x[i["T_E100h"]][-1] - C),
-        "E-102 hot outlet temperature": lambda x, u, pp: float(x[i["T_E102h"]][-1] - C),
-        "overhead temperature leaving E-100": lambda x, u, pp: float(x[i["T_E100c"]][0] - C),
+        "E-100 hot outlet temperature":
+            lambda x, u, pp: measured(x[..., i["T_E100h"]][..., -1] - C),
+        "E-102 hot outlet temperature":
+            lambda x, u, pp: measured(x[..., i["T_E102h"]][..., -1] - C),
+        "overhead temperature leaving E-100":
+            lambda x, u, pp: measured(x[..., i["T_E100c"]][..., 0] - C),
         "booster discharge pressure": lambda x, u, pp: streams(x, u).P_booster_out,  # kPa
         "K-101 discharge temperature": lambda x, u, pp: streams(x, u).T_K101_out - C,
         "residue gas flow": lambda x, u, pp: 60.0 * streams(x, u).F_comp,  # kmol/h
     }
     if plant.scheme == "conventional":
-        m["TK-101 temperature"] = lambda x, u, pp: float(x[i["T_TK101"].start] - C)
+        m["TK-101 temperature"] = lambda x, u, pp: measured(x[..., i["T_TK101"].start] - C)
         m["TK-101 level"] = level("M_TK101", 2 * pp.M_TK101_design)
     if plant.scheme != "conventional":
         m["branch flow"] = lambda x, u, pp: 60.0 * streams(x, u).F_branch  # kmol/h
     if plant.scheme == "crr":
         m["recycle flow"] = lambda x, u, pp: 60.0 * streams(x, u).F_recycle  # kmol/h
         # RFIC-100: the recycle over the residue gas, the specification of the design
-        m["recycle ratio"] = lambda x, u, pp: float(x[i["FT_recycle"].start]
-                                                    / x[i["FT_residue"].start])
-        m["E-104 hot outlet temperature"] = lambda x, u, pp: float(x[i["T_E104h"]][-1] - C)
-        m["E-104 cold outlet temperature"] = lambda x, u, pp: float(x[i["T_E104c"]][0] - C)
+        m["recycle ratio"] = lambda x, u, pp: measured(x[..., i["FT_recycle"].start]
+                                                       / x[..., i["FT_residue"].start])
+        m["E-104 hot outlet temperature"] = \
+            lambda x, u, pp: measured(x[..., i["T_E104h"]][..., -1] - C)
+        m["E-104 cold outlet temperature"] = \
+            lambda x, u, pp: measured(x[..., i["T_E104c"]][..., 0] - C)
     # Under crr, stage 1 is the mixing point above the trays and its temperature that of
     # the overhead.
     skip = pp.n_stages - len(plant.layout.unpack(design.x)["M"])
@@ -132,7 +140,7 @@ def measurements(design: Design) -> dict:
         m["stage 1 temperature"] = lambda x, u, pp: overhead_temperature(plant, x, u) - C
     for n in range(skip, pp.n_stages):
         m[f"stage {n + 1} temperature"] = (
-            lambda x, u, pp, k=n - skip: float(streams(x, u).column.T[k] - C))
+            lambda x, u, pp, k=n - skip: measured(streams(x, u).column.T[..., k] - C))
     return m
 
 
@@ -140,11 +148,16 @@ def overhead_temperature(plant: Plant, x, u) -> float:
     """The overhead's temperature, K: under crr, that of the stage-1 mixture."""
     st = plant.streams(x, u)
     if plant.scheme != "crr":
-        return float(st.column.T[0])
-    P_top = x[plant.layout.slices["P_top"]] * 1e3  # Pa
-    f = plant.eos.flash_PH(P_top, np.array([st.h_overhead]), st.column.y[:1],
-                           T0=st.column.T[:1])
-    return float(f.T[0])
+        return measured(st.column.T[..., 0])
+    if x.ndim == 1:
+        P_top = x[plant.layout.slices["P_top"]] * 1e3  # Pa
+        f = plant.eos.flash_PH(P_top, np.array([st.h_overhead]), st.column.y[:1],
+                               T0=st.column.T[:1])
+        return float(f.T[0])
+    P_top = x[:, plant.layout.slices["P_top"].start] * 1e3
+    f = plant._eos(namespace(x), batch=True).flash_PH(
+        P_top, st.h_overhead, st.column.y[:, 0], T0=st.column.T[:, 0])
+    return f.T
 
 
 # The loops, named by what they control; the tags of Chebeir et al. (2019) Fig. 4 and of
