@@ -37,6 +37,12 @@ void host_ln_phi(int n, int nc, const double *T, const double *P, const double *
         pb_ln_phi(nc, T[r], P[r], x + r * nc, liquid[r], Tc, m, ac, omk, bi, R, sqrt2,
                   out + r * nc);
 }
+void host_select_root(int n, const double *c2, const double *c1, const double *c0,
+                      const double *B, int liquid, double *Z)
+{
+    for (int r = 0; r < n; r++)
+        Z[r] = pb_select_root(c2[r], c1[r], c0[r], B[r], liquid);
+}
 void host_rachford_rice(int n, int nc, const double *z, const double *K,
                         const double *beta0, double tol, int max_iter, double *beta)
 {
@@ -98,6 +104,23 @@ def test_the_fugacity_row_compiled_for_the_host_is_the_numpy_one(eos, rows, host
                      ctypes.c_double(float(prm.SQRT2)), _p(out))
     with np.errstate(all="ignore"):
         _assert_same(out, eos.ln_phi(T, P, x, liquid), rtol=1e-10)
+
+
+@pytest.mark.parametrize("phase", ["liquid", "vapour"])
+def test_the_root_selection_compiled_for_the_host_is_the_numpy_one(host, phase, double_roots):
+    """On cubics with double and triple roots: the right root, as NumPy finds it.  The
+    two agree there only to the accuracy to which the coefficients determine the root,
+    since round-off decides which candidate is taken; elsewhere they agree to round-off
+    (the fugacity test above)."""
+    c2, c1, c0, a, b, tol = double_roots
+    B = np.zeros_like(a)
+    Z = np.empty_like(a)
+    host.host_select_root(ctypes.c_int(len(a)), _p(c2), _p(c1), _p(c0), _p(B),
+                          ctypes.c_int(phase == "liquid"), _p(Z))
+    with np.errstate(all="ignore"):
+        want = prm._select_root(prm._cubic_real_roots(c2, c1, c0), c2, c1, c0, B, phase)
+    assert np.all(np.abs(Z - want) <= tol)
+    assert np.all(np.abs(Z - (a if phase == "liquid" else b)) <= tol)
 
 
 def test_the_rachford_rice_row_compiled_for_the_host_is_the_numpy_one(eos, rows, host):

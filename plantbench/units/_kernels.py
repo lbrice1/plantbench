@@ -30,6 +30,7 @@ _THREADS = 128
 # The functions of one row, valid C and CUDA C++.  `DEVICE` is `__device__` on the GPU.
 DEVICE_SOURCE = r"""
 #define NC_MAX 16
+#define PB_EPS 2.220446049250313e-16
 
 /* The real roots of Z^3 + c2 Z^2 + c1 Z + c0 = 0, as `_cubic_real_roots`. */
 DEVICE void pb_cubic_real_roots(double c2, double c1, double c0, double *r)
@@ -38,8 +39,8 @@ DEVICE void pb_cubic_real_roots(double c2, double c1, double c0, double *r)
     double p = c1 - c2 * shift;
     double q = 2.0 * shift * shift * shift - shift * c1 + c0;
     double disc = (q / 2.0) * (q / 2.0) + (p / 3.0) * (p / 3.0) * (p / 3.0);
-    if (disc > 0.0) {
-        double sq = sqrt(disc);
+    if (disc > 0.0 || p >= 0.0) {
+        double sq = sqrt(disc > 0.0 ? disc : 0.0);
         double one = cbrt(-q / 2.0 + sq) + cbrt(-q / 2.0 - sq) - shift;
         r[0] = one;
         r[1] = one;
@@ -55,18 +56,33 @@ DEVICE void pb_cubic_real_roots(double c2, double c1, double c0, double *r)
     }
 }
 
-/* The compressibility root of a phase, as `PengRobinson._Z` with roots "closed". */
-DEVICE double pb_cubic_Z(double A, double B, int liquid)
+/* The double roots round-off can hide, as `_near_double_roots`: each stationary point
+   of the cubic where the cubic is zero to round-off, NaN otherwise. */
+DEVICE void pb_near_double_roots(double c2, double c1, double c0, double *r)
 {
-    double c2 = -(1.0 - B);
-    double c1 = A - 3.0 * B * B - 2.0 * B;
-    double c0 = -(A * B - B * B - B * B * B);
-    double r[3];
+    double d = c2 * c2 - 3.0 * c1;
+    double s = sqrt(d > 0.0 ? d : 0.0);
+    r[0] = (-c2 - s) / 3.0;
+    r[1] = (-c2 + s) / 3.0;
+    for (int k = 0; k < 2; k++) {
+        double Z = r[k];
+        double f = ((Z + c2) * Z + c1) * Z + c0;
+        double size = fabs(Z) * Z * Z + fabs(c2) * Z * Z + fabs(c1 * Z) + fabs(c0);
+        if (!(d >= 0.0 && fabs(f) <= 16.0 * PB_EPS * size))
+            r[k] = PB_NAN;
+    }
+}
+
+/* The root of a phase from the cubic's coefficients, as `_select_root`. */
+DEVICE double pb_select_root(double c2, double c1, double c0, double B, int liquid)
+{
+    double r[5];
     pb_cubic_real_roots(c2, c1, c0, r);
+    pb_near_double_roots(c2, c1, c0, r + 3);
     double Z = 0.0;
     int found = 0;
-    for (int k = 0; k < 3; k++) {
-        if (r[k] > B) {
+    for (int k = 0; k < 5; k++) {
+        if (r[k] > B) {  /* false for NaN */
             if (!found || (liquid ? r[k] < Z : r[k] > Z))
                 Z = r[k];
             found = 1;
@@ -74,11 +90,25 @@ DEVICE double pb_cubic_Z(double A, double B, int liquid)
     }
     if (!found)
         return PB_NAN;
+    double f = ((Z + c2) * Z + c1) * Z + c0;
     for (int it = 0; it < 2; it++) {
-        double f = ((Z + c2) * Z + c1) * Z + c0;
-        Z = Z - f / ((3.0 * Z + 2.0 * c2) * Z + c1);
+        double next = Z - f / ((3.0 * Z + 2.0 * c2) * Z + c1);
+        double f_next = ((next + c2) * next + c1) * next + c0;
+        if (fabs(f_next) <= fabs(f)) {  /* false for NaN */
+            Z = next;
+            f = f_next;
+        }
     }
     return Z;
+}
+
+/* The compressibility root of a phase, as `PengRobinson._Z` with roots "closed". */
+DEVICE double pb_cubic_Z(double A, double B, int liquid)
+{
+    double c2 = -(1.0 - B);
+    double c1 = A - 3.0 * B * B - 2.0 * B;
+    double c0 = -(A * B - B * B - B * B * B);
+    return pb_select_root(c2, c1, c0, B, liquid);
 }
 
 /* The state of one row, as `PengRobinson._state`: s = (a, da, b, A, B, Z, L), and

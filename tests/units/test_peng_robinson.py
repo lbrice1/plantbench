@@ -9,6 +9,7 @@ import pytest
 
 pytest.importorskip("thermo")
 
+from plantbench.units import peng_robinson as prm  # noqa: E402
 from plantbench.units.peng_robinson import Components, PengRobinson  # noqa: E402
 
 C = 273.15
@@ -149,3 +150,30 @@ def test_newton_holds_a_diverged_row_and_leaves_the_others(pr, monkeypatch):
     assert np.array_equal(out[0][-1], lnK[0])
     assert np.allclose(out[0][:-1], alone[0], rtol=0, atol=1e-12)
     assert np.array_equal(out[2][:-1], alone[2])
+
+
+@pytest.mark.parametrize("solve", [prm._eigen_real_roots, prm._cubic_real_roots])
+def test_a_double_or_triple_root_is_the_liquid_root(solve, double_roots):
+    """At a double root the eigenvalues split into a complex pair and the discriminant
+    comes out of either sign; the root is kept all the same, for either solver, and a
+    triple root is found too."""
+    c2, c1, c0, a, b, tol = double_roots
+    B = np.zeros_like(a)
+    with np.errstate(all="ignore"):
+        liquid = prm._select_root(solve(c2, c1, c0), c2, c1, c0, B, "liquid")
+        vapour = prm._select_root(solve(c2, c1, c0), c2, c1, c0, B, "vapour")
+    assert np.all(np.abs(liquid - a) <= tol)
+    assert np.all(np.abs(vapour - b) <= tol)
+
+
+def test_a_close_complex_pair_is_not_taken_for_a_root():
+    """(Z - b)((Z - a)^2 + w^2) has one real root, b, unless w is so small that the
+    cubic at a is zero to round-off."""
+    rng = np.random.default_rng(0)
+    a = rng.uniform(0.005, 0.6, 2000)
+    b = a + rng.uniform(0.01, 0.9, 2000)
+    w = 10.0 ** rng.uniform(-5, -1, 2000)
+    c2, c1, c0 = -(b + 2 * a), a * a + w * w + 2 * a * b, -b * (a * a + w * w)
+    for solve in (prm._eigen_real_roots, prm._cubic_real_roots):
+        Z = prm._select_root(solve(c2, c1, c0), c2, c1, c0, np.zeros_like(a), "liquid")
+        np.testing.assert_allclose(Z, b, rtol=0, atol=1e-10)
