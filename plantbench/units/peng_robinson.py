@@ -381,7 +381,8 @@ class PengRobinson:
 
     # -- flashes ---------------------------------------------------------------------
 
-    def flash_PT(self, T, P, z, K0=None, tol: float = 1e-12, max_iter: int = 400):
+    def flash_PT(self, T, P, z, K0=None, tol: float = 1e-12, max_iter: int = 400,
+                 stability: bool = True):
         """Two-phase flash at temperature and pressure, every row at once.
 
         Successive substitution on the K-values, with the Rachford–Rice equation solved
@@ -391,6 +392,12 @@ class PengRobinson:
         settled, since its properties do not depend on K; a two-phase row is finished by
         Newton on ln K once substitution has brought it close, and continues by
         substitution if Newton does not settle it.  Starts from Wilson's K or from `K0`.
+
+        Substitution that converges to the trivial solution K = 1 does not show that the
+        feed is one phase (Michelsen, 1982).  Those rows, and only those, are given the
+        tangent-plane test (`_stability`), and an unstable one is flashed again from the K
+        of its trial phase; one that comes back to the trivial solution raises an error.
+        `stability=False` leaves the test out.
 
         Returns the `Flash` of each row: vapour fraction clipped to [0, 1], phase
         compositions, K-values and the molar enthalpy and entropy of the whole.
@@ -439,7 +446,69 @@ class PengRobinson:
             raise RuntimeError(f"PT flash did not converge: change in ln K {float(xp.max(change)):.3g}")
         K = xp.exp(lnK)
         beta = _rachford_rice(z, K, beta)
+        trivial = xp.flatnonzero(xp.max(xp.abs(lnK), axis=1) < 1e-4)
+        if stability and len(trivial):
+            unstable, K_trial = self._stability(T[trivial], P[trivial], z[trivial])
+            u = trivial[unstable]
+            if len(u):
+                again = self.flash_PT(T[u], P[u], z[u], K0=K_trial[unstable], tol=tol,
+                                      max_iter=max_iter, stability=False)
+                if xp.any(xp.max(xp.abs(xp.log(again.K)), axis=1) < 1e-4):
+                    raise RuntimeError("PT flash of a feed the tangent-plane test finds "
+                                       "unstable converged to the trivial solution")
+                K[u] = again.K
+                beta[u] = again.V
         return self._result(T, P, z, K, beta)
+
+    def _stability(self, T, P, z, tol: float = 1e-10, max_iter: int = 200):
+        """The tangent-plane test of each feed z as one phase (Michelsen, 1982).
+
+        The feed takes the root of lower Gibbs energy, as `_liquid_like` chooses, and
+        d_i = ln z_i + ln phi_i(z).  From two trial phases, vapour-like W = z K and
+        liquid-like W = z / K with Wilson's K, successive substitution on
+        ln W_i = d_i - ln phi_i(w), w = W / sum W, finds the stationary points of
+        tm = 1 + sum W_i (ln W_i + ln phi_i(w) - d_i - 1), the tangent-plane distance
+        of w.  The feed is unstable where tm < 0 at a trial that has not collapsed onto
+        the feed.  Both trials of every row are one stack, each row stopping once its
+        ln W changes by less than `tol`; a trial still moving after `max_iter` is judged
+        where it is, since tm < 0 anywhere shows instability.
+
+        Returns whether each row is unstable, and K from the trial of lower tm: w / z for
+        the vapour-like trial, z / w for the liquid-like one, 1 for a component absent
+        from the feed.
+        """
+        xp = self.xp
+        n = len(T)
+        present = z > 0.0
+        zs = xp.where(present, z, 1e-300)
+        d = xp.log(zs) + self.ln_phi(T, P, z, self._liquid_like(T, P, z))
+        lnKw = xp.log(self.wilson_K(T, P))
+        T2, P2, z2, d2, present2 = (xp.concatenate([v, v]) for v in (T, P, zs, d, present))
+        liquid = xp.arange(2 * n) >= n  # the vapour-like trials first
+        lnW = xp.log(z2) + xp.concatenate([lnKw, -lnKw])
+        active = xp.ones(2 * n, dtype=bool)
+        for _ in range(max_iter):
+            i = xp.flatnonzero(active)
+            w = xp.exp(lnW[i])
+            w /= w.sum(axis=1, keepdims=True)
+            new = d2[i] - self.ln_phi(T2[i], P2[i], w, liquid[i])
+            change = xp.max(xp.abs(new - lnW[i]), axis=1)
+            lnW[i] = new
+            collapsed = _collapsed(w, z2[i], present2[i])
+            active[i[(change < tol) | collapsed]] = False
+            if not active.any():
+                break
+        W = xp.exp(lnW)
+        w = W / W.sum(axis=1, keepdims=True)
+        ln_phi = self.ln_phi(T2, P2, w, liquid)
+        terms = xp.where(present2, W * (lnW + ln_phi - d2 - 1.0), 0.0)
+        tm = xp.where(_collapsed(w, z2, present2), xp.inf, 1.0 + xp.sum(terms, axis=1))
+        vapour_trial = tm[:n] <= tm[n:]
+        tm_min = xp.where(vapour_trial, tm[:n], tm[n:])
+        lnw = xp.log(w)
+        lnK = xp.where(vapour_trial[:, None], lnw[:n] - xp.log(zs), xp.log(zs) - lnw[n:])
+        K = xp.where(present, xp.exp(lnK), 1.0)
+        return tm_min < -1e-8, K
 
     def _substitute(self, T, P, z, lnK, beta):
         """One step of successive substitution: ln K from the phases ln K gives."""
@@ -586,6 +655,15 @@ class Flash:
 # Where Newton's ln K leaves (-_LNK_BOUND, _LNK_BOUND) the row has diverged: no physical
 # K-value comes near the bound, and inside it exp(ln K) and its square stay finite.
 _LNK_BOUND = 100.0
+
+
+def _collapsed(w, z, present):
+    """Whether each trial phase w of the stability test is the feed z, to 1e-4 in ln w
+    over the components present."""
+    xp = namespace(z)
+    with np.errstate(divide="ignore"):
+        gap = xp.where(present, xp.abs(xp.log(w) - xp.log(z)), 0.0)
+    return xp.max(gap, axis=1) < 1e-4
 
 
 def _phases(z, K, beta):
