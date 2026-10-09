@@ -201,3 +201,35 @@ def test_flashes_agree_with_thermo_over_random_feeds(pr, comps):
         compared += 1
         assert abs(f.V[i] - ref.VF) < 1e-6, (i, f.V[i], ref.VF)
     assert compared > 0.9 * n
+
+
+def test_a_two_phase_feed_converging_to_the_trivial_solution_is_split(pr):
+    """Started from K within 1e-6 of 1, substitution converges to the trivial solution
+    on most two-phase feeds.  The tangent-plane test finds them unstable and the flash
+    returns the split it finds from Wilson's K; without the test they come back as one
+    phase."""
+    rng = np.random.default_rng(1)
+    n = 300
+    z = rng.dirichlet(np.full(len(NAMES), 0.7), n)
+    T = rng.uniform(140.0, 330.0, n)
+    P = rng.uniform(3e5, 7.5e6, n)
+    ref = pr.flash_PT(T, P, z)
+    two = (ref.V > 0.0) & (ref.V < 1.0)
+    K0 = np.tile(np.exp(1e-6 * np.where(np.arange(len(NAMES)) < 2, 1.0, -1.0)), (n, 1))
+    without = pr.flash_PT(T, P, z, K0=K0, stability=False)
+    assert np.sum(two & ((without.V == 0.0) | (without.V == 1.0))) > 100
+    f = pr.flash_PT(T, P, z, K0=K0)
+    np.testing.assert_allclose(f.V[two], ref.V[two], rtol=0, atol=1e-9)
+    np.testing.assert_allclose(f.x[two], ref.x[two], rtol=0, atol=1e-9)
+
+
+def test_the_stability_test_finds_the_two_phase_feeds(pr):
+    """On random feeds, unstable exactly where the flash from Wilson's K splits."""
+    rng = np.random.default_rng(2)
+    n = 300
+    z = rng.dirichlet(np.full(len(NAMES), 0.7), n)
+    T = rng.uniform(140.0, 330.0, n)
+    P = rng.uniform(3e5, 7.5e6, n)
+    f = pr.flash_PT(T, P, z)
+    unstable, _ = pr._stability(T, P, z)
+    np.testing.assert_array_equal(unstable, (f.V > 0.0) & (f.V < 1.0))
