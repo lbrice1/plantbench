@@ -410,12 +410,16 @@ class PengRobinson:
             change = xp.max(xp.abs(new - lnK[idx]), axis=1)
             lnK[idx] = new
             b = beta[idx]
-            # Far outside [0, 1] the phase is settled.  Near [0, 1], substitution slows as
-            # a phase boundary approaches, so Newton finishes the row, the negative flash
-            # telling afterwards whether it is one phase or two.  On a row Newton could
-            # not settle, which happens beside a phase boundary, the negative flash decides
-            # at once: substitution there can stall at round-off without converging.
-            one_phase = ((b < -0.01) | (b > 1.01)
+            # A row whose ln K has come within 1e-3 of converging, the closeness at which
+            # Newton is called, and whose fraction is then more than 0.01 outside [0, 1]
+            # is one phase, and stops without Newton.  Before that the fraction says
+            # nothing: from Wilson's K it can be -1 on a feed that is two-phase.  Nearer
+            # [0, 1], substitution slows as a phase boundary approaches, so Newton
+            # finishes the row, the negative flash telling afterwards whether it is one
+            # phase or two.  On a row Newton could not settle, which happens beside a
+            # phase boundary, the negative flash decides at once: substitution there can
+            # stall at round-off without converging.
+            one_phase = ((((b < -0.01) | (b > 1.01)) & (change < 1e-3))
                          | (no_newton[idx] & ((b <= 0.0) | (b >= 1.0))))
             trivial = xp.max(xp.abs(new), axis=1) < 1e-4
             close = ~one_phase & ~trivial & (change < 1e-3) & ~no_newton[idx]
