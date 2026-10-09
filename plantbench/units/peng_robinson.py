@@ -160,8 +160,11 @@ class PengRobinson:
     leading axis of states (stages): T and P of shape (N,), compositions (N, n_c).
 
     `roots` chooses how the cubic is solved: "eigen", as the eigenvalues of its companion
-    matrix, or "closed", by the trigonometric and Cardano formulas.  Both are polished by
-    the same two Newton steps and agree to round-off.  "eigen" is the default and what
+    matrix, or "closed", by the trigonometric and Cardano formulas.  To either are added
+    the double roots that round-off hides from it (`_near_double_roots`), and both are
+    polished by the same two Newton steps.  They agree to round-off, except at a double
+    root, which the coefficients determine only to about 1e-8 and which each finds to
+    that accuracy.  "eigen" is the default and what
     the published results were produced with.  "closed" costs the same on the few rows of
     one column and about 2.4 times less per row on the thousands of rows of a batch, and
     it is the one a GPU can run; `on` chooses it.  On a GPU, with "closed", the state of
@@ -829,10 +832,10 @@ def _cubic_real_roots(c2, c1, c0):
     The cubic is depressed to t^3 + p t + q = 0 by Z = t - c2 / 3.  Where it has three
     distinct real roots (discriminant at most zero, p < 0) they are given by the
     trigonometric formula; elsewhere, by Cardano's, repeated in all three columns, which
-    at a triple root (p = q = 0) gives it exactly.  A double root that round-off makes
-    the discriminant positive is lost here and supplied by `_near_double_roots`.  The roots carry
-    round-off from the cancellation in Cardano's formula, which the Newton polish of
-    `PengRobinson._Z` removes.
+    at a triple root (p = q = 0) gives it exactly.  A double root for which round-off
+    makes the discriminant positive is lost here and supplied by `_near_double_roots`.
+    The roots carry round-off from the cancellation in Cardano's formula, which the
+    Newton polish of `_select_root` removes.
     """
     xp = namespace(c2)
     shift = c2 / 3.0
@@ -841,8 +844,9 @@ def _cubic_real_roots(c2, c1, c0):
     disc = (q / 2.0) ** 2 + (p / 3.0) ** 3
     sq = xp.sqrt(xp.maximum(disc, 0.0))
     one = xp.cbrt(-q / 2.0 + sq) + xp.cbrt(-q / 2.0 - sq) - shift
-    # Three distinct real roots need p < 0.  Where p >= 0 the value is discarded, and p = -1 stands
-    # in so that the arithmetic stays finite; a bound near zero would underflow pn * r.
+    # Three distinct real roots need p < 0.  Where p >= 0 the value is discarded, and
+    # p = -1 stands in so that the arithmetic stays finite; a bound near zero would
+    # underflow pn * r.
     pn = xp.where(p < 0.0, p, -1.0)
     r = 2.0 * xp.sqrt(-pn / 3.0)
     theta = xp.arccos(xp.clip(3.0 * q / (pn * r), -1.0, 1.0)) / 3.0
