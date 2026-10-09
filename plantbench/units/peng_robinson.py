@@ -38,6 +38,7 @@ R = 8.314462618  # J/(mol K)
 T_REF = 298.15  # K, ideal-gas enthalpy and entropy reference
 P_REF = 101325.0  # Pa, ideal-gas entropy reference
 SQRT2 = np.sqrt(2.0)
+EPS = float(np.finfo(float).eps)
 # The Peng–Robinson constants, as `thermo` uses them, so that the two agree to round-off.
 OMEGA_A = 0.45723552892138218938
 OMEGA_B = 0.077796073903888455972
@@ -216,31 +217,11 @@ class PengRobinson:
         """The compressibility root of the phase: the smallest real root above B for a
         liquid, the largest for a vapour.  Where one real root exists it serves both.
         `phase` is "liquid", "vapour", or a boolean array true on the liquid rows."""
-        xp = self.xp
         c2 = -(1.0 - B)
         c1 = A - 3.0 * B**2 - 2.0 * B
         c0 = -(A * B - B**2 - B**3)
-        if self.roots == "eigen":
-            n = len(A)
-            comp = xp.zeros((n, 3, 3))
-            comp[:, 0, :] = xp.stack([-c2, -c1, -c0], axis=1)
-            comp[:, 1, 0] = comp[:, 2, 1] = 1.0
-            roots = xp.linalg.eigvals(comp)
-            real = xp.where((xp.abs(roots.imag) < 1e-9) & (roots.real > B[:, None]),
-                            roots.real, xp.nan)
-        else:
-            real = _cubic_real_roots(c2, c1, c0)
-            real = xp.where(real > B[:, None], real, xp.nan)
-        if isinstance(phase, str):
-            Z = xp.nanmin(real, axis=1) if phase == "liquid" else xp.nanmax(real, axis=1)
-        else:
-            Z = xp.where(phase, xp.nanmin(real, axis=1), xp.nanmax(real, axis=1))
-        # Polish on the cubic itself: the eigenvalues carry round-off that finite-
-        # difference Jacobians of the right-hand side would see as noise.
-        for _ in range(2):
-            f = ((Z + c2) * Z + c1) * Z + c0
-            Z = Z - f / ((3.0 * Z + 2.0 * c2) * Z + c1)
-        return Z
+        solve = _eigen_real_roots if self.roots == "eigen" else _cubic_real_roots
+        return _select_root(solve(c2, c1, c0), c2, c1, c0, B, phase)
 
     def _state(self, T, P, x, phase):
         if self._use_kernels:
@@ -647,12 +628,71 @@ def _rachford_rice(z, K, beta0, tol: float = 1e-14, max_iter: int = 100):
     return beta
 
 
+def _select_root(real, c2, c1, c0, B, phase):
+    """The compressibility root of each row from the real roots of its cubic, (N, 3):
+    with the near-double roots added, the smallest above B for a liquid and the largest
+    for a vapour, polished by two Newton steps on the cubic.  The eigenvalues carry
+    round-off that finite-difference Jacobians of the right-hand side would see as noise.
+    A step is taken only where it does not increase the residual, since at a double root
+    the derivative vanishes with it and the step is 0/0 or runs off."""
+    xp = namespace(c2)
+    real = xp.concatenate([real, _near_double_roots(c2, c1, c0)], axis=1)
+    real = xp.where(real > B[:, None], real, xp.nan)
+    if isinstance(phase, str):
+        Z = xp.nanmin(real, axis=1) if phase == "liquid" else xp.nanmax(real, axis=1)
+    else:
+        Z = xp.where(phase, xp.nanmin(real, axis=1), xp.nanmax(real, axis=1))
+    f = ((Z + c2) * Z + c1) * Z + c0
+    for _ in range(2):
+        new = Z - f / ((3.0 * Z + 2.0 * c2) * Z + c1)
+        f_new = ((new + c2) * new + c1) * new + c0
+        keep = xp.abs(f_new) <= xp.abs(f)  # false where NaN
+        Z = xp.where(keep, new, Z)
+        f = xp.where(keep, f_new, f)
+    return Z
+
+
+def _near_double_roots(c2, c1, c0):
+    """The double roots of Z^3 + c2 Z^2 + c1 Z + c0 = 0 that a solver can miss, (N, 2).
+
+    At a double root the two roots are determined by the coefficients only to about the
+    square root of the machine epsilon: the companion-matrix eigenvalues split into a
+    complex pair, and the discriminant of the depressed cubic comes out of either sign.
+    A double root is a stationary point of the cubic where the cubic vanishes, so each
+    stationary point is returned where the cubic there is zero to round-off, and NaN
+    elsewhere.  A complex pair with an imaginary part below about 1e-6 is taken for a
+    double root by this test; in double precision the two cannot be told apart.
+    """
+    xp = namespace(c2)
+    d = c2 * c2 - 3.0 * c1
+    s = xp.sqrt(xp.maximum(d, 0.0))
+    Z = xp.stack([(-c2 - s) / 3.0, (-c2 + s) / 3.0], axis=1)
+    c2, c1, c0 = c2[:, None], c1[:, None], c0[:, None]
+    f = ((Z + c2) * Z + c1) * Z + c0
+    size = xp.abs(Z) * Z * Z + xp.abs(c2) * Z * Z + xp.abs(c1 * Z) + xp.abs(c0)
+    double = (d >= 0.0)[:, None] & (xp.abs(f) <= 16.0 * EPS * size)
+    return xp.where(double, Z, xp.nan)
+
+
+def _eigen_real_roots(c2, c1, c0):
+    """The real roots of Z^3 + c2 Z^2 + c1 Z + c0 = 0 as the eigenvalues of its companion
+    matrix with an imaginary part below 1e-9, NaN in place of the others, (N, 3)."""
+    xp = namespace(c2)
+    comp = xp.zeros((len(c2), 3, 3))
+    comp[:, 0, :] = xp.stack([-c2, -c1, -c0], axis=1)
+    comp[:, 1, 0] = comp[:, 2, 1] = 1.0
+    roots = xp.linalg.eigvals(comp)
+    return xp.where(xp.abs(roots.imag) < 1e-9, roots.real, xp.nan)
+
+
 def _cubic_real_roots(c2, c1, c0):
     """The real roots of Z^3 + c2 Z^2 + c1 Z + c0 = 0, one row per cubic, (N, 3).
 
     The cubic is depressed to t^3 + p t + q = 0 by Z = t - c2 / 3.  Where it has three
-    real roots (discriminant at most zero) they are given by the trigonometric formula;
-    where it has one, by Cardano's, repeated in all three columns.  The roots carry
+    distinct real roots (discriminant at most zero, p < 0) they are given by the
+    trigonometric formula; elsewhere, by Cardano's, repeated in all three columns, which
+    at a triple root (p = q = 0) gives it exactly.  A double root that round-off makes
+    the discriminant positive is lost here and supplied by `_near_double_roots`.  The roots carry
     round-off from the cancellation in Cardano's formula, which the Newton polish of
     `PengRobinson._Z` removes.
     """
@@ -663,11 +703,11 @@ def _cubic_real_roots(c2, c1, c0):
     disc = (q / 2.0) ** 2 + (p / 3.0) ** 3
     sq = xp.sqrt(xp.maximum(disc, 0.0))
     one = xp.cbrt(-q / 2.0 + sq) + xp.cbrt(-q / 2.0 - sq) - shift
-    # Three real roots need p < 0.  Where p >= 0 the value is discarded, and p = -1 stands
+    # Three distinct real roots need p < 0.  Where p >= 0 the value is discarded, and p = -1 stands
     # in so that the arithmetic stays finite; a bound near zero would underflow pn * r.
     pn = xp.where(p < 0.0, p, -1.0)
     r = 2.0 * xp.sqrt(-pn / 3.0)
     theta = xp.arccos(xp.clip(3.0 * q / (pn * r), -1.0, 1.0)) / 3.0
     k = 2.0 * np.pi / 3.0 * xp.arange(3)
     three = r[:, None] * xp.cos(theta[:, None] - k) - shift[:, None]
-    return xp.where((disc > 0.0)[:, None], one[:, None], three)
+    return xp.where(((disc > 0.0) | (p >= 0.0))[:, None], one[:, None], three)
