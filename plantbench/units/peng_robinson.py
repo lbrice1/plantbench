@@ -393,11 +393,13 @@ class PengRobinson:
         Newton on ln K once substitution has brought it close, and continues by
         substitution if Newton does not settle it.  Starts from Wilson's K or from `K0`.
 
-        Substitution that converges to the trivial solution K = 1 does not show that the
-        feed is one phase (Michelsen, 1982).  Those rows, and only those, are given the
-        tangent-plane test (`_stability`), and an unstable one is flashed again from the K
-        of its trial phase; one that comes back to the trivial solution raises an error.
-        `stability=False` leaves the test out.
+        Neither a vapour fraction far outside [0, 1] nor convergence to the trivial
+        solution K = 1 shows that the feed is one phase (Michelsen, 1982).  Those rows,
+        and only those, are given the tangent-plane test (`_stability`): a stable one is
+        one phase, and an unstable one is flashed again from the K of its trial phase; one
+        that comes back to the trivial solution raises an error.  `stability=False` leaves
+        the test out, and takes a row far outside [0, 1] for one phase once its ln K is
+        within 1e-3 of converging.
 
         Returns the `Flash` of each row: vapour fraction clipped to [0, 1], phase
         compositions, K-values and the molar enthalpy and entropy of the whole.
@@ -410,6 +412,8 @@ class PengRobinson:
         beta = xp.full(len(T), 0.5)
         active = xp.ones(len(T), dtype=bool)
         no_newton = xp.zeros(len(T), dtype=bool)
+        tested = xp.zeros(len(T), dtype=bool)
+        stable = xp.zeros(len(T), dtype=bool)
         for _ in range(max_iter):
             idx = xp.flatnonzero(active)
             beta[idx] = _rachford_rice(z[idx], xp.exp(lnK[idx]), beta[idx])
@@ -417,19 +421,36 @@ class PengRobinson:
             change = xp.max(xp.abs(new - lnK[idx]), axis=1)
             lnK[idx] = new
             b = beta[idx]
-            # A row whose ln K has come within 1e-3 of converging, the closeness at which
-            # Newton is called, and whose fraction is then more than 0.01 outside [0, 1]
-            # is one phase, and stops without Newton.  Before that the fraction says
-            # nothing: from Wilson's K it can be -1 on a feed that is two-phase.  Nearer
-            # [0, 1], substitution slows as a phase boundary approaches, so Newton
-            # finishes the row, the negative flash telling afterwards whether it is one
-            # phase or two.  On a row Newton could not settle, which happens beside a
-            # phase boundary, the negative flash decides at once: substitution there can
-            # stall at round-off without converging.
-            one_phase = ((((b < -0.01) | (b > 1.01)) & (change < 1e-3))
-                         | (no_newton[idx] & ((b <= 0.0) | (b >= 1.0))))
-            trivial = xp.max(xp.abs(new), axis=1) < 1e-4
-            close = ~one_phase & ~trivial & (change < 1e-3) & ~no_newton[idx]
+            # A fraction more than 0.01 outside [0, 1] does not by itself show a row to be
+            # one phase: from Wilson's K it can be -1 on a feed that is two-phase, and
+            # far outside [0, 1] substitution can cycle without converging.  The row is
+            # given the tangent-plane test, once: if stable it is one phase and stops; if
+            # not, substitution starts again from the K of its trial phase.  Without the
+            # test, the row stops once its ln K is within 1e-3 of converging, the
+            # closeness at which Newton is called.  Nearer [0, 1], substitution slows as a
+            # phase boundary approaches, so Newton finishes the row, the negative flash
+            # telling afterwards whether it is one phase or two.  On a row Newton could
+            # not settle, which happens beside a phase boundary, the negative flash
+            # decides at once: substitution there can stall at round-off without
+            # converging.
+            far = (b < -0.01) | (b > 1.01)
+            restarted = xp.zeros(len(idx), dtype=bool)
+            if stability:
+                one_phase = xp.zeros(len(idx), dtype=bool)
+                ask = far & ~tested[idx]
+                if xp.any(ask):
+                    a = idx[ask]
+                    unstable, K_trial = self._stability(T[a], P[a], z[a])
+                    tested[a] = True
+                    lnK[a] = xp.where(unstable[:, None], xp.log(K_trial), lnK[a])
+                    stable[a] = ~unstable
+                    one_phase[ask] = ~unstable
+                    restarted[ask] = unstable
+            else:
+                one_phase = far & (change < 1e-3)
+            one_phase |= no_newton[idx] & ((b <= 0.0) | (b >= 1.0))
+            trivial = (xp.max(xp.abs(lnK[idx]), axis=1) < 1e-4) & ~restarted
+            close = ~one_phase & ~trivial & ~restarted & (change < 1e-3) & ~no_newton[idx]
             settled = xp.zeros(len(idx), dtype=bool)
             if xp.any(close):
                 c = idx[close]
@@ -439,14 +460,20 @@ class PengRobinson:
                 beta[c] = xp.where(ok, beta_c, beta[c])
                 no_newton[c] = ~ok
                 settled[close] = ok
-            active[idx[one_phase | trivial | settled | (change < tol)]] = False
+            active[idx[one_phase | trivial | settled | ((change < tol) & ~restarted)]] = False
             if not active.any():
                 break
         else:
             raise RuntimeError(f"PT flash did not converge: change in ln K {float(xp.max(change)):.3g}")
         K = xp.exp(lnK)
         beta = _rachford_rice(z, K, beta)
-        trivial = xp.flatnonzero(xp.max(xp.abs(lnK), axis=1) < 1e-4)
+        # A row the test found stable stopped where its K need not have converged, and
+        # the fraction from that K says nothing: it is the phase of the lower Gibbs
+        # energy, as at the trivial solution.
+        if xp.any(stable):
+            st = xp.flatnonzero(stable)
+            beta[st] = xp.where(self._liquid_like(T[st], P[st], z[st]), -1.0, 2.0)
+        trivial = xp.flatnonzero((xp.max(xp.abs(lnK), axis=1) < 1e-4) & ~tested)
         if stability and len(trivial):
             unstable, K_trial = self._stability(T[trivial], P[trivial], z[trivial])
             u = trivial[unstable]
@@ -577,12 +604,34 @@ class PengRobinson:
         return Flash(T=T, P=P, V=V, x=x, y=y, K=K, h=h, s=s)
 
     def _liquid_like(self, T, P, z):
-        """Where one phase: whether the liquid root has the lower Gibbs energy."""
+        """Where one phase: whether it is liquid.  The liquid if its root has the lower
+        Gibbs energy; where the cubic has one real root and the two are the same, by the
+        phase identification parameter (Venkatarathnam and Oellrich, 2011), liquid above
+        1, as `thermo` decides."""
         xp = self.xp
         ln_phi_L, ln_phi_V = self._ln_phi_pair(T, P, z, z)
         gL = xp.einsum("ni,ni->n", z, ln_phi_L)
         gV = xp.einsum("ni,ni->n", z, ln_phi_V)
-        return gL < gV - 1e-12
+        tie = xp.abs(gL - gV) <= 1e-12
+        if not xp.any(tie):
+            return gL < gV - 1e-12
+        t = xp.flatnonzero(tie)
+        pip = xp.full(len(T), xp.nan)
+        pip[t] = self._pip(T[t], P[t], self._state(T[t], P[t], z[t], "liquid"))
+        return (gL < gV - 1e-12) | (tie & (pip > 1.0))
+
+    def _pip(self, T, P, state):
+        """The phase identification parameter of a phase,
+        v (d2P/dTdv / dP/dT - d2P/dv2 / dP/dv), from the derivatives of the equation."""
+        a, da, b, _, _, _, Z, _ = state
+        v = Z * R * T / P
+        D = v * v + 2.0 * b * v - b * b
+        dD = 2.0 * v + 2.0 * b
+        dP_dT = R / (v - b) - da / D
+        d2P_dTdv = -R / (v - b) ** 2 + da * dD / D**2
+        dP_dv = -R * T / (v - b) ** 2 + a * dD / D**2
+        d2P_dv2 = 2.0 * R * T / (v - b) ** 3 + 2.0 * a / D**2 - 2.0 * a * dD**2 / D**3
+        return v * (d2P_dTdv / dP_dT - d2P_dv2 / dP_dv)
 
     def _flash_P(self, P, z, target, value, T0, K0, tol, max_iter):
         """Flash at pressure and a second property (`h` or `s`), both increasing in T:

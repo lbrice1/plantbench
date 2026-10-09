@@ -179,19 +179,27 @@ def test_a_close_complex_pair_is_not_taken_for_a_root():
         np.testing.assert_allclose(Z, b, rtol=0, atol=1e-10)
 
 
-def test_flashes_agree_with_thermo_over_random_feeds(pr, comps):
-    """Random feeds of the seven components over 140 to 330 K and 0.3 to 7.5 MPa: the
-    same phases as `thermo`, which tests stability, and the same vapour fraction, to
-    `thermo`'s own tolerance (agreement is to about 1e-7).  A row
-    is not to be taken for one phase from a vapour fraction of Wilson's K, which is
-    outside [0, 1] on many of these two-phase feeds.  Feeds `thermo` splits into two
-    liquids are left out: our flash labels the lighter of those phases vapour."""
+@pytest.mark.parametrize("absent", [False, True])
+def test_flashes_agree_with_thermo_over_random_feeds(pr, comps, absent):
+    """Random feeds of the seven components over 140 to 330 K and 0.3 to 7.5 MPa, and
+    the same without nitrogen and, in every other feed, without n-hexane: the same
+    phases as `thermo`, which tests stability, and the same vapour fraction, to
+    `thermo`'s own tolerance (agreement is to about 1e-7).  A row is not to be taken
+    for one phase from a vapour fraction of Wilson's K, which is outside [0, 1] on many
+    of these two-phase feeds, and a one-phase row is labelled as `thermo` labels it.
+    Feeds `thermo` splits into two liquids are left out: our flash labels the lighter
+    of those phases vapour."""
     rng = np.random.default_rng(1)
     n = 300
     z = rng.dirichlet(np.full(len(NAMES), 0.7), n)
+    if absent:
+        z[:, 0] = 0.0
+        z[::2, -1] = 0.0
+        z /= z.sum(axis=1, keepdims=True)
     T = rng.uniform(140.0, 330.0, n)
     P = rng.uniform(3e5, 7.5e6, n)
-    f = pr.flash_PT(T, P, z)
+    with np.errstate(all="ignore"):
+        f = pr.flash_PT(T, P, z)
     flasher = comps.flasher()
     compared = 0
     for i in range(n):
