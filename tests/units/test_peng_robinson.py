@@ -233,3 +233,25 @@ def test_the_stability_test_finds_the_two_phase_feeds(pr):
     f = pr.flash_PT(T, P, z)
     unstable, _ = pr._stability(T, P, z)
     np.testing.assert_array_equal(unstable, (f.V > 0.0) & (f.V < 1.0))
+
+
+def test_rachford_rice_ignores_absent_components_and_the_batch(pr):
+    """Two feeds without nitrogen, one with its root beside the end of the interval that
+    nitrogen's K would set: each gets the same vapour fraction in a batch as alone, and
+    the batch flashes.  Nitrogen's K counted, the first row ended on that false pole and,
+    iterated on while the second converged, gave NaN for both."""
+    K = np.array([[10.395195, 4.359806, 1.163768, 0.483217, 0.19472, 0.087131, 0.02935],
+                  [1.029519, 1.016816, 1.001447, 0.996938, 0.98894, 0.993222, 0.980652]])
+    z = np.array([[0.0, 3.204426e-02, 3.965281e-01, 3.670951e-01, 2.601369e-02,
+                   1.020476e-01, 7.627122e-02],
+                  [0.0, 1.055532e-01, 2.355596e-01, 1.970999e-01, 3.924383e-01,
+                   1.419289e-04, 6.920709e-02]])
+    beta0 = np.array([-0.106151, -5.673748])
+    both = prm._rachford_rice(z, K, beta0)
+    alone = [prm._rachford_rice(z[i:i + 1], K[i:i + 1], beta0[i:i + 1])[0] for i in range(2)]
+    assert np.all(np.isfinite(both))
+    np.testing.assert_array_equal(both, alone)
+    r = np.sum(z * (K - 1.0) / (1.0 + both[:, None] * (K - 1.0)), axis=1)
+    np.testing.assert_allclose(r, 0.0, atol=1e-12)
+    f = pr.flash_PT(np.array([297.52, 197.34]), np.array([3243388.70, 4622565.31]), z)
+    assert np.all(np.isfinite(f.V))
