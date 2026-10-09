@@ -172,10 +172,12 @@ DEVICE void pb_ln_phi(int nc, double T, double P, const double *x, int liquid,
 DEVICE double pb_rachford_rice(int nc, const double *z, const double *K, double beta0,
                                double tol, int max_iter)
 {
-    double Kmax = K[0], Kmin = K[0];
-    for (int i = 1; i < nc; i++) {
-        Kmax = K[i] > Kmax ? K[i] : Kmax;
-        Kmin = K[i] < Kmin ? K[i] : Kmin;
+    double Kmax = -1e300, Kmin = 1e300;  /* no K comes near */
+    for (int i = 0; i < nc; i++) {
+        if (z[i] > 0.0) {  /* an absent component has no term */
+            Kmax = K[i] > Kmax ? K[i] : Kmax;
+            Kmin = K[i] < Kmin ? K[i] : Kmin;
+        }
     }
     if (Kmax <= 1.0)
         return -1.0;
@@ -188,7 +190,7 @@ DEVICE double pb_rachford_rice(int nc, const double *z, const double *K, double 
     for (int it = 0; it < max_iter; it++) {
         double f = 0.0, df = 0.0;
         for (int i = 0; i < nc; i++) {
-            double Km1 = K[i] - 1.0;
+            double Km1 = z[i] > 0.0 ? K[i] - 1.0 : 0.0;
             double d = 1.0 + b * Km1;
             f += z[i] * Km1 / d;
             df -= z[i] * Km1 * Km1 / (d * d);

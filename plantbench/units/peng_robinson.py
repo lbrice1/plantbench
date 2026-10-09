@@ -677,12 +677,17 @@ def _rachford_rice(z, K, beta0, tol: float = 1e-14, max_iter: int = 100):
     """The vapour fraction solving sum z (K - 1) / (1 + beta (K - 1)) = 0, by Newton kept
     inside the interval where every denominator is positive, which extends beyond [0, 1]
     for the negative flash.  A row whose K are all above 1 has no root and is all vapour
-    (returned as 2); all below 1, all liquid (returned as -1)."""
+    (returned as 2); all below 1, all liquid (returned as -1).  Only the components
+    present in z count: an absent one has no term in the sum, and its K, which may be
+    anything, would otherwise set a false end of the interval.  Each row stops once it
+    has converged, as on a GPU, so that its result does not depend on the batch."""
     xp = namespace(z)
     if _kernels.applies(xp):
         return _kernels.rachford_rice(z, K, beta0, tol, max_iter)
-    Km1 = K - 1.0
-    Kmax, Kmin = K.max(axis=1), K.min(axis=1)
+    present = z > 0.0
+    Km1 = xp.where(present, K - 1.0, 0.0)
+    Kmax = xp.where(present, K, -xp.inf).max(axis=1)
+    Kmin = xp.where(present, K, xp.inf).min(axis=1)
     beta = xp.where(Kmax <= 1.0, -1.0, xp.where(Kmin >= 1.0, 2.0, xp.asarray(beta0, float)))
     rows = xp.flatnonzero((Kmax > 1.0) & (Kmin < 1.0))
     if len(rows) == 0:
@@ -691,6 +696,7 @@ def _rachford_rice(z, K, beta0, tol: float = 1e-14, max_iter: int = 100):
     lo = 1.0 / (1.0 - Kmax[rows])
     hi = 1.0 / (1.0 - Kmin[rows])
     b = xp.clip(beta[rows], lo + 1e-9 * (hi - lo), hi - 1e-9 * (hi - lo))
+    finished = xp.zeros(len(rows), dtype=bool)
     for _ in range(max_iter):
         d = 1.0 + b[:, None] * Kr
         f = xp.sum(zr * Kr / d, axis=1)
@@ -703,8 +709,9 @@ def _rachford_rice(z, K, beta0, tol: float = 1e-14, max_iter: int = 100):
         # sending the row to bisect the bracket down to the tolerance.
         new = xp.where((new < lo) | (new > hi), 0.5 * (lo + hi), new)
         done = xp.abs(new - b) <= tol * (1.0 + xp.abs(b))
-        b = new
-        if xp.all(done):
+        b = xp.where(finished, b, new)
+        finished = finished | done
+        if xp.all(finished):
             break
     beta[rows] = b
     return beta
