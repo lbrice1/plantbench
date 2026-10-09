@@ -200,6 +200,8 @@ def test_flashes_agree_with_thermo_over_random_feeds(pr, comps, absent):
     P = rng.uniform(3e5, 7.5e6, n)
     with np.errstate(all="ignore"):
         f = pr.flash_PT(T, P, z)
+    assert np.all(np.isfinite(f.h)) and np.all(np.isfinite(f.s))
+    assert np.all(f.x >= 0.0) and np.all(f.y >= 0.0)
     flasher = comps.flasher()
     compared = 0
     for i in range(n):

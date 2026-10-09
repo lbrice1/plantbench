@@ -135,6 +135,15 @@ def test_the_rachford_rice_row_compiled_for_the_host_is_the_numpy_one(eos, rows,
     np.testing.assert_allclose(beta, prm._rachford_rice(x, K, beta0), rtol=0, atol=1e-12)
 
 
+def test_a_flash_of_the_rows_on_the_host_is_finite(eos, rows):
+    """The reference of the device flash below: finite on every row, so that the
+    comparison, which takes NaN for equal to NaN, compares numbers."""
+    T, P, z, _ = rows
+    f = eos.flash_PT(T, P, z)
+    assert np.all(np.isfinite(f.h)) and np.all(np.isfinite(f.s))
+    assert np.all(f.x >= 0.0) and np.all(f.y >= 0.0)
+
+
 @pytest.mark.parametrize("phase", ["liquid", "vapour", "rows"])
 @pytest.mark.gpu
 @pytest.mark.skipif(not backend.available("cuda"), reason="no CuPy or no GPU")
@@ -170,6 +179,8 @@ def test_a_flash_on_the_device_is_the_numpy_one(eos, rows):
     d = lambda v: backend.to_device(v, "cuda")  # noqa: E731
     want = eos.flash_PT(T, P, z)
     got = eos.on("cuda").flash_PT(d(T), d(P), d(z))
+    # assert_allclose takes NaN for equal to NaN; a NaN on both is a failure of both.
+    assert np.all(np.isfinite(want.h)) and np.all(np.isfinite(want.s))
     np.testing.assert_allclose(backend.to_host(got.V), want.V, rtol=0, atol=1e-9)
     np.testing.assert_allclose(backend.to_host(got.h), want.h, rtol=1e-9, atol=1e-6)
     np.testing.assert_allclose(backend.to_host(got.s), want.s, rtol=1e-9, atol=1e-9)
