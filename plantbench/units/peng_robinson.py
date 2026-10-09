@@ -472,10 +472,11 @@ class PengRobinson:
         beta = _rachford_rice(z, K, beta)
         # A row the test found stable stopped where its K need not have converged, and
         # the fraction from that K says nothing: it is the phase of the lower Gibbs
-        # energy, as at the trivial solution.
+        # energy, as at the trivial solution.  The fraction is set to 0 or 1, not beyond:
+        # outside [0, 1] the absent phase's composition from K can be negative.
         if xp.any(stable):
             st = xp.flatnonzero(stable)
-            beta[st] = xp.where(self._liquid_like(T[st], P[st], z[st]), -1.0, 2.0)
+            beta[st] = xp.where(self._liquid_like(T[st], P[st], z[st]), 0.0, 1.0)
         trivial = xp.flatnonzero((xp.max(xp.abs(lnK), axis=1) < 1e-4) & ~tested)
         if stability and len(trivial):
             unstable, K_trial = self._stability(T[trivial], P[trivial], z[trivial])
