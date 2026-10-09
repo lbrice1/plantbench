@@ -396,13 +396,12 @@ class PengRobinson:
         Newton on ln K once substitution has brought it close, and continues by
         substitution if Newton does not settle it.  Starts from Wilson's K or from `K0`.
 
-        Neither a vapour fraction far outside [0, 1] nor convergence to the trivial
-        solution K = 1 shows that the feed is one phase (Michelsen, 1982).  Those rows,
-        and only those, are given the tangent-plane test (`_stability`): a stable one is
-        one phase, and an unstable one is flashed again from the K of its trial phase; one
-        that comes back to the trivial solution raises an error.  `stability=False` leaves
-        the test out, and takes a row far outside [0, 1] for one phase once its ln K is
-        within 1e-3 of converging.
+        A row converging to a vapour fraction far outside [0, 1] is one phase.  Neither
+        convergence to the trivial solution K = 1 nor a fraction far outside [0, 1] that
+        does not converge shows the same (Michelsen, 1982).  Those rows, and only those,
+        are given the tangent-plane test (`_stability`): a stable one is one phase, and an
+        unstable one is flashed again from the K of its trial phase; one that comes back
+        to the trivial solution raises an error.  `stability=False` leaves the test out.
 
         Returns the `Flash` of each row: vapour fraction clipped to [0, 1], phase
         compositions, K-values and the molar enthalpy and entropy of the whole.
@@ -417,30 +416,31 @@ class PengRobinson:
         no_newton = xp.zeros(len(T), dtype=bool)
         tested = xp.zeros(len(T), dtype=bool)
         stable = xp.zeros(len(T), dtype=bool)
-        for _ in range(max_iter):
+        for it in range(max_iter):
             idx = xp.flatnonzero(active)
             beta[idx] = _rachford_rice(z[idx], xp.exp(lnK[idx]), beta[idx])
             new = self._substitute(T[idx], P[idx], z[idx], lnK[idx], beta[idx])
             change = xp.max(xp.abs(new - lnK[idx]), axis=1)
             lnK[idx] = new
             b = beta[idx]
-            # A fraction more than 0.01 outside [0, 1] does not by itself show a row to be
-            # one phase: from Wilson's K it can be -1 on a feed that is two-phase, and
-            # far outside [0, 1] substitution can cycle without converging.  The row is
-            # given the tangent-plane test, once: if stable it is one phase and stops; if
-            # not, substitution starts again from the K of its trial phase.  Without the
-            # test, the row stops once its ln K is within 1e-3 of converging, the
-            # closeness at which Newton is called.  Nearer [0, 1], substitution slows as a
-            # phase boundary approaches, so Newton finishes the row, the negative flash
-            # telling afterwards whether it is one phase or two.  On a row Newton could
-            # not settle, which happens beside a phase boundary, the negative flash
-            # decides at once: substitution there can stall at round-off without
-            # converging.
+            # A fraction more than 0.01 outside [0, 1] shows a row to be one phase once
+            # its ln K is within 1e-3 of converging, the closeness at which Newton is
+            # called: the negative flash is reliable where it converges (Whitson and
+            # Michelsen, 1989).  Before that the fraction says nothing: from Wilson's K it
+            # can be -1 on a feed that is two-phase.  Far outside [0, 1] substitution can
+            # also cycle without converging, so a row still far outside and unconverged
+            # after _FAR_ITERATIONS is given the tangent-plane test, once: if stable it is
+            # one phase and stops; if not, substitution starts again from the K of its
+            # trial phase.  Nearer [0, 1], substitution slows as a phase boundary
+            # approaches, so Newton finishes the row, the negative flash telling
+            # afterwards whether it is one phase or two.  On a row Newton could not
+            # settle, which happens beside a phase boundary, the negative flash decides at
+            # once: substitution there can stall at round-off without converging.
             far = (b < -0.01) | (b > 1.01)
+            one_phase = far & (change < 1e-3)
             restarted = xp.zeros(len(idx), dtype=bool)
-            if stability:
-                one_phase = xp.zeros(len(idx), dtype=bool)
-                ask = far & ~tested[idx]
+            if stability and it >= _FAR_ITERATIONS:
+                ask = far & ~one_phase & ~tested[idx]
                 if xp.any(ask):
                     a = idx[ask]
                     unstable, K_trial = self._stability(T[a], P[a], z[a])
@@ -449,8 +449,6 @@ class PengRobinson:
                     stable[a] = ~unstable
                     one_phase[ask] = ~unstable
                     restarted[ask] = unstable
-            else:
-                one_phase = far & (change < 1e-3)
             one_phase |= no_newton[idx] & ((b <= 0.0) | (b >= 1.0))
             trivial = (xp.max(xp.abs(lnK[idx]), axis=1) < 1e-4) & ~restarted
             close = ~one_phase & ~trivial & ~restarted & (change < 1e-3) & ~no_newton[idx]
@@ -585,11 +583,13 @@ class PengRobinson:
         xp = self.xp
         x, y = _phases(z, K, beta)
         # A row that is one phase, or that converged to the trivial solution K = 1, is
-        # all liquid or all vapour: labelled by the fraction the negative flash gives, and
-        # for the trivial solution by which root is the more stable.
+        # all liquid or all vapour, as `_liquid_like` decides, as `thermo` does.  The sign
+        # of the negative flash's fraction is not used: beside the trivial solution, where
+        # a dense feed with one real root converges, it is meaningless.
         trivial = xp.max(xp.abs(xp.log(K)), axis=1) < 1e-4
-        liquid = (beta <= 0.0) | (trivial & self._liquid_like(T, P, z))
-        vapour = (beta >= 1.0) | (trivial & ~liquid)
+        one = (beta <= 0.0) | (beta >= 1.0) | trivial
+        liquid = one & self._liquid_like(T, P, z)
+        vapour = one & ~liquid
         V = xp.where(liquid, 0.0, xp.where(vapour, 1.0, beta))
         x = xp.where(liquid[:, None], z, x)
         y = xp.where(vapour[:, None], z, y)
@@ -704,6 +704,12 @@ class Flash:
     h: np.ndarray
     s: np.ndarray
 
+
+# A PT flash row still far outside [0, 1] and unconverged after this many substitutions
+# is given the stability test.  Rows that converge there mostly do so within 10 (95 % of
+# random natural-gas feeds) and nearly all within 40; one that is tested early is only
+# decided sooner.
+_FAR_ITERATIONS = 30
 
 # Where Newton's ln K leaves (-_LNK_BOUND, _LNK_BOUND) the row has diverged: no physical
 # K-value comes near the bound, and inside it exp(ln K) and its square stay finite.
