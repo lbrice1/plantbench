@@ -4,6 +4,7 @@
     plantbench describe reactor_separator_recycle
     plantbench run jacketed_cstr [--config config.toml] [--t-end 600] [--dt 1] [--out run.npz]
     plantbench generate spec.toml [--out DIR] [--workers N] [--jacobian batched] [--device cuda]
+                                  [--ensemble M]
     plantbench datasets [DIR]
     plantbench compare A B [--tol T] [--no-trajectories]
     plantbench card data/regimes [--format text|md|latex|json]
@@ -89,8 +90,11 @@ def _solver_arguments(p) -> None:
 
 def _generate(args) -> None:
     from plantbench.datagen import generate
-    out = generate(args.spec, out_dir=args.out, workers=args.workers,
-                   solver={"jacobian": args.jacobian, "device": args.device})
+    if args.ensemble:
+        solver = {"ensemble": args.ensemble, "device": args.device}
+    else:
+        solver = {"jacobian": args.jacobian, "device": args.device}
+    out = generate(args.spec, out_dir=args.out, workers=args.workers, solver=solver)
     print(f"dataset in {out}")
 
 
@@ -248,6 +252,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--out", type=Path, help="directory (default data/<study name>)")
     p.add_argument("--workers", type=int, default=1)
     _solver_arguments(p)
+    p.add_argument("--ensemble", type=int, metavar="M",
+                   help="run the configurations as ensembles of up to M members in lockstep "
+                        "(Rodas5P), for a case with a batched right-hand side")
     p.set_defaults(func=_generate)
     p = sub.add_parser("datasets", help="the datasets on disk and what they are of")
     p.add_argument("dir", nargs="?", default="data", help="a dataset, or a directory of them")

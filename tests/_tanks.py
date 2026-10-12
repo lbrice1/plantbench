@@ -11,6 +11,7 @@ from typing import ClassVar
 import numpy as np
 
 from plantbench.core import control as ctl
+from plantbench.core.case import Case
 from plantbench.core.casekit import measured
 from plantbench.core.control import Loop, Ratio
 from plantbench.core.instruments import Actuator, Instrument
@@ -63,3 +64,25 @@ def tanks_structure(design):
         Ratio("q2 ratio", "q2", "q1"),
     ]
     return ctl.bias_from_design(loops, design)
+
+
+def _make_design(config):
+    from plantbench.core.case import override
+    design = tanks_design()
+    return Tanks(x=design.x, u=design.u, pp=override(design.pp, config.params))
+
+
+TANKS_CASE = Case(
+    id="tanks",
+    title="Two tanks",
+    summary="Two tanks in series under a level cascade, written for batches.",
+    options={},
+    structures=("cascade",),
+    default_structure="cascade",
+    make_design=_make_design,
+    make_structure=lambda design, config: tanks_structure(design),
+    disturbances={},
+    measurements=lambda design: {"level 1": lambda x, u, pp: measured(x[..., 0]),
+                                 "level 2": lambda x, u, pp: measured(x[..., 1])},
+    state_names=lambda design: ["h1", "h2"],
+)
