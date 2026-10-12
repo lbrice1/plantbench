@@ -24,6 +24,8 @@ run() { pixi run --frozen -e cuda "$@"; }
 run test-gpu
 run python benchmarks/scaling.py --states 16 64 256
 run python benchmarks/jacobian.py --cases ngl_deethanizer
+# Ensembles in lockstep against their number of members, on the GPU; the host only alone.
+run python benchmarks/ensemble.py --members 1 4 16 64 --cpu-max 1 --reference 1
 # The largest batches again, on the GPU only, with a numerical warning an error: the
 # traceback names the solve that overflowed, if one does.
 echo "warnings as errors, 64 Jacobians per call:"

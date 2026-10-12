@@ -127,6 +127,21 @@ On a node with one NVIDIA A100, the same run takes 142 s with LSODA's own Jacobi
 
 `device="cuda"` needs an NVIDIA GPU with fast double precision (A100, H100) and CuPy: `pip install 'plantbench[gpu]'` with a CUDA 12 toolkit on the machine, or the pixi environment `cuda` (linux-64), which takes CuPy and the CUDA runtime from conda-forge and needs only the driver. Everything is evaluated in double precision, since the integrations run at a relative tolerance of 1e-8.
 
+## Ensembles in lockstep
+
+Many configurations of one design can be integrated together, as one ensemble whose members advance in lockstep:
+
+```python
+results = pb.run_ensemble("ngl_deethanizer", configs, t_end=60.0, dt=1.0, device="cuda")
+traj = results[0].trajectory        # or results[0].error, for a member that failed
+```
+
+and from the command line, `plantbench generate spec.toml --ensemble 64 --device cuda`. Members share a design when they have the same structure, options and parameters, and they are run together when their control structures also have the same state layout; across members, the tunings, set-points, set-point steps, instrument and actuator parameters and disturbances may all differ. Each step evaluates the right-hand sides of every member still running as one batch, and the Jacobians of those that need one as another, so that on a GPU, where an evaluation costs about the same from one state to a few thousand, an ensemble of many members costs little more per step than one.
+
+The integrator is the Rosenbrock method Rodas5P (Steinebach, 2023), of order 5 with an embedded estimate of order 4, rather than LSODA: a Rosenbrock method does the same, fixed work every step, an exact Jacobian and eight solves with it, which is what lets members with different step sizes share every evaluation. Each member has its own time, step size and error control, and its steps end on its own breakpoints and on the output grid. A member that fails stops, and the others go on; `wall_budget` applies to the ensemble, and `generate` gives an ensemble the specification's budget, which is per run, times its number of members. The trajectories agree with LSODA's to the tolerance, not to the last bit: over a 20-minute run of `ngl_deethanizer`, to within half a tolerance (|Δx| ≤ 0.46 (atol + rtol |x|)), and against a run at a relative tolerance of 1e-11 the ensemble's states are the closer of the two. A dataset records `solver = {"ensemble": M, "device": ...}` on each run made this way, with `ensemble_size` and `ensemble_wall_time` beside the run's share of the wall time.
+
+On the host an ensemble gains nothing, since its evaluations cost in proportion to their size: a 20-minute run of `ngl_deethanizer` takes 26 s alone or as one of four, against 9 to 10 s with the batched Jacobian and LSODA, which remains the choice there. `benchmarks/ensemble.py` measures the throughput against the number of members on each device.
+
 ## Generating a dataset
 
 A specification is a TOML file:
@@ -174,7 +189,7 @@ A dotted path names a configuration section and then its keys: `"tuning.reactor 
 plantbench generate spec.toml --workers 8
 ```
 
-or `plantbench.datagen.generate("spec.toml", workers=8)`. A script that generates with more than one worker needs an `if __name__ == "__main__":` guard, because each worker process imports the script it was started from. The dataset is written to `data/<name>/` unless `--out` is given:
+or `plantbench.datagen.generate("spec.toml", workers=8)`. A script that generates with more than one worker needs an `if __name__ == "__main__":` guard, because each worker process imports the script it was started from. For a case with a batched right-hand side, `--ensemble M` runs the configurations in one process as ensembles of up to M members instead (Ensembles in lockstep); it cannot be combined with more than one worker. The dataset is written to `data/<name>/` unless `--out` is given:
 
 | File | Contents |
 |---|---|
