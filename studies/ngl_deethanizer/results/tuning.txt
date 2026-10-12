@@ -1,0 +1,7 @@
+THE CLOSED-LOOP SPECTRA OF THE CONTROL STRUCTURES
+analyzed at 8728792 dirty with plantbench 0.2.1, Python 3.14.7, NumPy 2.5.3, SciPy 1.18.1, scikit-learn 1.9.1, pacmap 0.9.1, hdbscan 0.8.44
+
+structure              damping   rightmost  slowest, min     s
+open loop                0.512   6.092e-15           inf    12
+basic                    0.445  -8.102e-02          12.3     8
+composition cascade      0.427  -6.478e-02          15.4     8

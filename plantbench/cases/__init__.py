@@ -32,6 +32,8 @@ from plantbench.core.case import Case
 _MODULES = {
     "reactor_separator_recycle": "plantbench.cases.reactor_separator_recycle.definition",
     "jacketed_cstr": "plantbench.cases.jacketed_cstr.definition",
+    "ngl_demethanizer": "plantbench.cases.ngl_demethanizer.definition",
+    "ngl_deethanizer": "plantbench.cases.ngl_deethanizer.definition",
 }
 ENTRY_POINT_GROUP = "plantbench.cases"
 
@@ -56,9 +58,11 @@ _SESSION: dict[str, _Session] = {}
 def check_id(case_id: str) -> None:
     """Refuse an id that does not follow the naming convention of docs/adding-a-case.md."""
     if not isinstance(case_id, str) or not _ID.fullmatch(case_id) or len(case_id) > ID_MAX:
-        raise ValueError(f"{case_id!r} is not a case id: lowercase words joined by single "
-                         f"underscores, beginning with a letter, not the word 'case', at "
-                         f"most {ID_MAX} characters")
+        raise ValueError(
+            f"{case_id!r} is not a case id: lowercase words joined by single "
+            f"underscores, beginning with a letter, not the word 'case', at "
+            f"most {ID_MAX} characters"
+        )
 
 
 def _entry_points() -> dict[str, EntryPoint]:
@@ -68,8 +72,10 @@ def _entry_points() -> dict[str, EntryPoint]:
         if ep.name in _MODULES:
             raise ValueError(f"{_describe(ep)} declares {ep.name!r}, a built-in case")
         if ep.name in found and found[ep.name].value != ep.value:
-            raise ValueError(f"case {ep.name!r} is declared by two packages: "
-                             f"{_describe(found[ep.name])} and {_describe(ep)}")
+            raise ValueError(
+                f"case {ep.name!r} is declared by two packages: "
+                f"{_describe(found[ep.name])} and {_describe(ep)}"
+            )
         found[ep.name] = ep
     return found
 
@@ -92,8 +98,9 @@ def load_case(case_id: str) -> Case:
     if case_id in _SESSION:
         entry = _SESSION[case_id]
         if entry.case is None:
-            entry.case = _checked(entry.factory(), case_id,
-                                  f"{entry.module}.{entry.factory.__name__}")
+            entry.case = _checked(
+                entry.factory(), case_id, f"{entry.module}.{entry.factory.__name__}"
+            )
         return entry.case
     raise KeyError(f"no case {case_id!r}; cases: {list_cases()}")
 
@@ -125,8 +132,9 @@ def source(case_id: str) -> dict:
 
 def package_dir(case: Case) -> Path:
     """The directory of the package that defines a case: that of its `make_design`."""
-    module = sys.modules.get(case.make_design.__module__) \
-        or importlib.import_module(case.make_design.__module__)
+    module = sys.modules.get(case.make_design.__module__) or importlib.import_module(
+        case.make_design.__module__
+    )
     return Path(module.__file__).resolve().parent
 
 

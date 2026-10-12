@@ -1,0 +1,28 @@
+THE DESIGN POINTS OF THE THREE SCHEMES
+analyzed at 8728792 dirty with plantbench 0.2.1, Python 3.14.7, NumPy 2.5.3, SciPy 1.18.1, scikit-learn 1.9.1, pacmap 0.9.1, hdbscan 0.8.44
+
+                                      conventional           gsp           crr
+TK-100 temperature, C                       -40.03        -44.21        -44.81
+ethane recovery                               0.82          0.82          0.82
+methane in NGL, mol %                            1             1             1
+NGL, kmol/h                                  273.9         273.8         273.8
+residue gas, kmol/h                           4706          4706          4706
+expander flow, kmol/h                         4741          2981          2979
+branch, kmol/h                                   0          1927          1928
+recycle, kmol/h                                  0             0          2353
+chiller duty, kW                              1990          2176          2224
+reboiler duty, kW                             1278         908.7         917.3
+expander power, kW                            1589          1163          1156
+K-101 power, kW                               8123          8375          8378
+K-102 power, kW                                  0             0         29.32
+column top, C                               -116.3        -114.4        -114.3
+stage 8, C                                  -114.8        -103.2        -103.7
+stage 26, C                                 -110.5        -98.65        -99.11
+rise over stages 1-8, K                       1.41         11.15         10.68
+rise over stage 26 to reboiler, K            102.3         90.41         90.87
+E-100 hot outlet, C                         -7.488         -9.75        -9.809
+E-102 hot outlet, C                         -63.74        -75.16         -75.2
+overhead leaving E-100, C                   -12.62        -15.42        -15.49
+booster discharge, kPa                        1227          1109          1108
+
+section 4.1, separation at the top (rise over stages 1-8): conventional 1.41 K, gsp 11.15 K, crr 10.68 K
