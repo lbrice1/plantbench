@@ -21,7 +21,8 @@ cd "$SLURM_SUBMIT_DIR"
 git log --oneline -1
 nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv
 run() { pixi run --frozen -e cuda "$@"; }
-run test-gpu
+# A failed test is reported and the benchmarks run all the same.
+run test-gpu || echo "test-gpu FAILED"
 run python benchmarks/scaling.py --states 16 64 256
 run python benchmarks/jacobian.py --cases ngl_deethanizer
 # Ensembles in lockstep against their number of members, on the GPU; the host only alone.

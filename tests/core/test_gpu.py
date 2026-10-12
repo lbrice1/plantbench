@@ -63,7 +63,17 @@ def test_an_ensemble_on_the_device_agrees_with_one_on_the_host(setup):
     S = [s.structure, ctl.with_tuning(s.structure, {"stage 4 temperature": {"Kc": -0.4}})]
     ds = [None, pb.build(case, case.config(disturbance={"name": "feed ethane",
                                                         "fraction": 0.1, "t": 0.5})).disturbance]
-    host = integrate_ensemble(d, S, ds, 2.0, n_points=5)
-    dev = integrate_ensemble(d, S, ds, 2.0, n_points=5, device="cuda")
+    rtol, atol = 1e-8, 1e-10
+    host = integrate_ensemble(d, S, ds, 2.0, n_points=5, rtol=rtol, atol=atol)
+    dev = integrate_ensemble(d, S, ds, 2.0, n_points=5, rtol=rtol, atol=atol, device="cuda")
     assert host.status == dev.status == ["ok", "ok"]
-    assert np.max(np.abs(dev.Y - host.Y) / (1e-6 + np.abs(host.Y))) < 1e-9
+    assert np.array_equal(host.steps, dev.steps) and np.array_equal(host.rejected, dev.rejected)
+    # In units of the tolerance: a relative difference would be dominated by states that
+    # are zero to within atol, which neither device resolves further.  On the host, the
+    # device's batched inverse in place of LU moves a controller state by 0.065 of the
+    # tolerance, and the kernels' 2e-11 relative difference in the states amounts to at
+    # most 0.002.
+    err = np.abs(dev.Y - host.Y) / (atol + rtol * np.abs(host.Y))
+    m, k, i = np.unravel_index(np.argmax(err), err.shape)
+    assert err[m, k, i] < 0.25, (f"member {m}, t = {host.t[k]}, state {i}: host "
+                                f"{host.Y[m, k, i]!r}, device {dev.Y[m, k, i]!r}")
