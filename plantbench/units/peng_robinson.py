@@ -160,9 +160,9 @@ class PengRobinson:
     leading axis of states (stages): T and P of shape (N,), compositions (N, n_c).
 
     `roots` chooses how the cubic is solved: "eigen", as the eigenvalues of its companion
-    matrix, or "closed", by the trigonometric and Cardano formulas.  To either are added
-    the double roots that round-off hides from it (`_near_double_roots`), and both are
-    polished by the same two Newton steps.  They agree to round-off, except at a double
+    matrix, or "closed", by the trigonometric and Cardano formulas.  Each adds the double
+    roots that round-off hides from it (`_near_double_roots`), and both are polished by
+    the same two Newton steps.  They agree to round-off, except at a double
     root, which the coefficients determine only to about 1e-8 and which each finds to
     that accuracy.  "eigen" is the default and what
     the published results were produced with.  "closed" costs the same on the few rows of
@@ -777,14 +777,13 @@ def _rachford_rice(z, K, beta0, tol: float = 1e-14, max_iter: int = 100):
 
 
 def _select_root(real, c2, c1, c0, B, phase):
-    """The compressibility root of each row from the real roots of its cubic, (N, 3):
-    with the near-double roots added, the smallest above B for a liquid and the largest
-    for a vapour, polished by two Newton steps on the cubic.  The eigenvalues carry
+    """The compressibility root of each row from the real roots of its cubic, (N, k), the
+    near-double roots among them: the smallest above B for a liquid and the largest for a
+    vapour, polished by two Newton steps on the cubic.  The eigenvalues carry
     round-off that finite-difference Jacobians of the right-hand side would see as noise.
     A step is taken only where it does not increase the residual, since at a double root
     the derivative vanishes with it and the step is 0/0 or runs off."""
     xp = namespace(c2)
-    real = xp.concatenate([real, _near_double_roots(c2, c1, c0)], axis=1)
     real = xp.where(real > B[:, None], real, xp.nan)
     if isinstance(phase, str):
         Z = xp.nanmin(real, axis=1) if phase == "liquid" else xp.nanmax(real, axis=1)
@@ -822,19 +821,55 @@ def _near_double_roots(c2, c1, c0):
     return xp.where(double, Z, xp.nan)
 
 
+def _with_double_roots(real, c2, c1, c0, cube, disc):
+    """The real roots of each row, (N, 3), followed by its near-double roots, (N, 5); on the
+    host, the real roots alone where no row can have a double root.
+
+    `_near_double_roots` costs about as much as solving the cubic, and it finds a double
+    root on few rows of few evaluations.  It is skipped where the discriminant of the
+    depressed cubic t^3 + p t + q, disc = (q / 2)^2 + cube with cube = (p / 3)^3, shows
+    that it would return NaN on every row.  The discriminant is the product of the
+    depressed cubic at its two stationary points, f(-s) f(s) / 4, s^2 = -p / 3, which
+    differ by 4 m, m = |cube|^(1/2).  A row has a double root to that test when |f| <=
+    delta = 16 eps size at one of them, so |disc| <= delta (delta + 4 m) / 4.  For size
+    up to about 3e3 (it is of order 1 to 1e2 for compressibility cubics) that is below
+    1e-11 (m + 1e-11), and the bound of 1e-10 (m + 1e-10) also covers the round-off of
+    disc, of order eps size m.  On a device the roots are always added, since the check
+    would wait on the device.
+    """
+    xp = namespace(c2)
+    if xp is np and not np.any(np.abs(disc) <= 1e-10 * (np.sqrt(np.abs(cube)) + 1e-10)):
+        return real
+    return xp.concatenate([real, _near_double_roots(c2, c1, c0)], axis=1)
+
+
+def _depressed(c2, c1, c0):
+    """The cubic Z^3 + c2 Z^2 + c1 Z + c0 depressed to t^3 + p t + q by Z = t - shift:
+    shift, p, q, (p / 3)^3 and the discriminant (q / 2)^2 + (p / 3)^3."""
+    shift = c2 / 3.0
+    p = c1 - c2 * shift
+    q = 2.0 * shift**3 - shift * c1 + c0
+    cube = (p / 3.0) ** 3
+    return shift, p, q, cube, (q / 2.0) ** 2 + cube
+
+
 def _eigen_real_roots(c2, c1, c0):
     """The real roots of Z^3 + c2 Z^2 + c1 Z + c0 = 0 as the eigenvalues of its companion
-    matrix with an imaginary part below 1e-9, NaN in place of the others, (N, 3)."""
+    matrix with an imaginary part below 1e-9, NaN in place of the others, (N, 3), with
+    the near-double roots as `_with_double_roots` adds them."""
     xp = namespace(c2)
     comp = xp.zeros((len(c2), 3, 3))
     comp[:, 0, :] = xp.stack([-c2, -c1, -c0], axis=1)
     comp[:, 1, 0] = comp[:, 2, 1] = 1.0
     roots = xp.linalg.eigvals(comp)
-    return xp.where(xp.abs(roots.imag) < 1e-9, roots.real, xp.nan)
+    real = xp.where(xp.abs(roots.imag) < 1e-9, roots.real, xp.nan)
+    _, _, _, cube, disc = _depressed(c2, c1, c0)
+    return _with_double_roots(real, c2, c1, c0, cube, disc)
 
 
 def _cubic_real_roots(c2, c1, c0):
-    """The real roots of Z^3 + c2 Z^2 + c1 Z + c0 = 0, one row per cubic, (N, 3).
+    """The real roots of Z^3 + c2 Z^2 + c1 Z + c0 = 0, one row per cubic, (N, 3), with the
+    near-double roots as `_with_double_roots` adds them.
 
     The cubic is depressed to t^3 + p t + q = 0 by Z = t - c2 / 3.  Where it has three
     distinct real roots (discriminant at most zero, p < 0) they are given by the
@@ -845,10 +880,7 @@ def _cubic_real_roots(c2, c1, c0):
     Newton polish of `_select_root` removes.
     """
     xp = namespace(c2)
-    shift = c2 / 3.0
-    p = c1 - c2 * shift
-    q = 2.0 * shift**3 - shift * c1 + c0
-    disc = (q / 2.0) ** 2 + (p / 3.0) ** 3
+    shift, p, q, cube, disc = _depressed(c2, c1, c0)
     sq = xp.sqrt(xp.maximum(disc, 0.0))
     one = xp.cbrt(-q / 2.0 + sq) + xp.cbrt(-q / 2.0 - sq) - shift
     # Three distinct real roots need p < 0.  Where p >= 0 the value is discarded, and
@@ -859,4 +891,5 @@ def _cubic_real_roots(c2, c1, c0):
     theta = xp.arccos(xp.clip(3.0 * q / (pn * r), -1.0, 1.0)) / 3.0
     k = 2.0 * np.pi / 3.0 * xp.arange(3)
     three = r[:, None] * xp.cos(theta[:, None] - k) - shift[:, None]
-    return xp.where(((disc > 0.0) | (p >= 0.0))[:, None], one[:, None], three)
+    real = xp.where(((disc > 0.0) | (p >= 0.0))[:, None], one[:, None], three)
+    return _with_double_roots(real, c2, c1, c0, cube, disc)

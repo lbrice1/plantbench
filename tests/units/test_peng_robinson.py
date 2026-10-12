@@ -166,6 +166,28 @@ def test_a_double_or_triple_root_is_the_liquid_root(solve, double_roots):
     assert np.all(np.abs(vapour - b) <= tol)
 
 
+def test_the_double_root_check_is_skipped_only_where_it_finds_none():
+    """Cubics with a double or triple root in [0, 3] and a simple root 1e-9 to 3 from it,
+    their constant term perturbed by up to 1e-4 relative: wherever the check finds a
+    double root, the discriminant passes the bound that keeps the check, by a factor of
+    at least 10; and the roots of ordinary cubics come without the check's columns."""
+    rng = np.random.default_rng(1)
+    n = 200_000
+    a = rng.uniform(0.0, 3.0, n)
+    b = a + rng.choice([-1, 1], n) * 10 ** rng.uniform(-9, 0.5, n)
+    b[: n // 10] = a[: n // 10]
+    c2, c1, c0 = -(b + 2 * a), a * a + 2 * a * b, -b * a * a
+    c0 = c0 * (1 + 10 ** rng.uniform(-18, -4, n) * rng.choice([-1, 0, 1], n))
+    _, _, _, cube, disc = prm._depressed(c2, c1, c0)
+    found = np.isfinite(prm._near_double_roots(c2, c1, c0)).any(axis=1)
+    assert found.sum() > n // 4
+    bound = 1e-10 * (np.sqrt(np.abs(cube)) + 1e-10)
+    assert np.all(np.abs(disc[found]) * 10 <= bound[found])
+    c2, c1, c0 = np.array([-0.95]), np.array([0.2]), np.array([-0.004])
+    for solve in (prm._eigen_real_roots, prm._cubic_real_roots):
+        assert solve(c2, c1, c0).shape == (1, 3)
+
+
 def test_a_close_complex_pair_is_not_taken_for_a_root():
     """(Z - b)((Z - a)^2 + w^2) has one real root, b, unless w is so small that the
     cubic at a is zero to round-off."""
