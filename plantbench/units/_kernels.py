@@ -7,7 +7,7 @@ do in one launch, one thread per row, what the NumPy code of `peng_robinson` doe
 
 - `ln_phi` and `state`: the mixture parameters, the root of the cubic with its two Newton
   steps, and the log fugacity coefficients of a phase;
-- `rachford_rice`: the vapour fraction, each row stopping as soon as it has converged,
+- `rachford_rice`: the vapor fraction, each row stopping as soon as it has converged,
   where the NumPy loop runs every row until the slowest has.
 
 They follow the NumPy code formula by formula, and agree with it to round-off (tests in
@@ -168,7 +168,7 @@ DEVICE void pb_ln_phi(int nc, double T, double P, const double *x, int liquid,
     }
 }
 
-/* The vapour fraction of one row, as `_rachford_rice`, the row stopping once converged. */
+/* The vapor fraction of one row, as `_rachford_rice`, the row stopping once converged. */
 DEVICE double pb_rachford_rice(int nc, const double *z, const double *K, double beta0,
                                double tol, int max_iter)
 {
@@ -286,7 +286,7 @@ def _rows(eos, T, P, x, phase):
 
 
 def ln_phi(eos, T, P, x, phase):
-    """`PengRobinson.ln_phi` of every row in one launch; `phase` is "liquid", "vapour",
+    """`PengRobinson.ln_phi` of every row in one launch; `phase` is "liquid", "vapor",
     or a boolean array true on the liquid rows."""
     cp = backend.module("cuda")
     args = _rows(eos, T, P, x, phase)

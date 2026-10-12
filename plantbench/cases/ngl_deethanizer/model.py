@@ -99,7 +99,7 @@ class Streams:
 
 
 _SCALARS = ("T_drum", "h_drum", "F_condensed", "D", "B", "h_feed", "h_heated",
-            "vapour_heated")
+            "vapor_heated")
 
 
 @dataclass
@@ -265,7 +265,7 @@ class Plant:
             implied["v_VLV102"] = B / pp.F_VLV102_max
             dM_B = 0.0
 
-        # The condenser, from the vapour leaving stage 1 to the drum liquid.
+        # The condenser, from the vapor leaving stage 1 to the drum liquid.
         V_top, h_top, y_top = col.V[:, 0], col.h_V[:, 0], col.y[:, 0]
         latent = h_top - h_D
         if hold:
@@ -286,7 +286,7 @@ class Plant:
         full = (lambda v: xp.broadcast_to(xp.asarray(v, dtype=float), (m,)))
         streams = Streams(column=col, T_drum=T_D, h_drum=h_D, F_condensed=F_cond,
                           D=full(D), B=full(B), h_feed=h_in, h_heated=h_out,
-                          vapour_heated=heated.V,
+                          vapor_heated=heated.V,
                           implied={k: full(v) for k, v in implied.items()})
         return dx_state, streams
 

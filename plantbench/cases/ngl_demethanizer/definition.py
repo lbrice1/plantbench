@@ -101,7 +101,7 @@ def measurements(design: Design) -> dict:
         "reboiler level": level("M_B", 2 * pp.M_reboiler_design),
         "overhead pressure": state("P_top"),  # kPa
         "methane in NGL": lambda x, u, pp: measured(100.0 * x[..., i["x_B"]][..., C1]),  # mol %
-        # ERIC-100: the NGL flow transmitter and the analysers on the feed and the NGL
+        # ERIC-100: the NGL flow transmitter and the analyzers on the feed and the NGL
         "ethane recovery": lambda x, u, pp: measured(
             x[..., i["FT_NGL"].start] * x[..., i["x_B"]][..., C2]
             / (u.F_feed * u.z_feed[..., C2])),

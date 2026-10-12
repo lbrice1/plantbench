@@ -294,10 +294,10 @@ class Plant:
             self._keep(key, f.K)
         return Flash(**{k: v.reshape((m, r) + v.shape[1:]) for k, v in vars(f).items()})
 
-    def _vapour(self, eos, T, P, y):
-        """Enthalpy and entropy of a vapour stream at T K and P kPa, each (m,)."""
+    def _vapor(self, eos, T, P, y):
+        """Enthalpy and entropy of a vapor stream at T K and P kPa, each (m,)."""
         P = namespace(T).full_like(T, P * KPA) if np.ndim(P) == 0 else P * KPA
-        return eos.h(T, P, y, "vapour"), eos.s(T, P, y, "vapour")
+        return eos.h(T, P, y, "vapor"), eos.s(T, P, y, "vapor")
 
     def _liquid_h(self, eos, T, P, x):
         P = namespace(T).full_like(T, P * KPA) if np.ndim(P) == 0 else P * KPA
@@ -342,7 +342,7 @@ class Plant:
         L100 = implied["v_LCV100"] * pp.F_LCV100_max if hold \
             else u.v_LCV100 * pp.F_LCV100_max
         h_chiller_out = h_E100h[:, -1] - Q_chiller * KW / F
-        h_V1, _ = self._vapour(eos, s["T_TK100"], pp.P_TK100, y1)
+        h_V1, _ = self._vapor(eos, s["T_TK100"], pp.P_TK100, y1)
 
         h_L100 = self._liquid_h(eos, s["T_TK100"], pp.P_TK100, s["x_TK100"])
         P_col = self.column.pressures(col_(s["P_top"] * KPA)) / KPA
@@ -378,7 +378,7 @@ class Plant:
 
         # TE-100: expanded to the pressure of the stage it feeds.
         P_exp_out = P_col[:, stages["expander"]]
-        h_in, s_in = self._vapour(eos, T_exp, P_exp, y_exp)
+        h_in, s_in = self._vapor(eos, T_exp, P_exp, y_exp)
         iso = eos.flash_PS(P_exp_out * KPA, s_in, y_exp,
                            T0=self._start("iso_T", m, xp, default=T_exp - 55.0),
                            K0=self._start("iso_K", m, xp))
@@ -388,7 +388,7 @@ class Plant:
         h_exp_out = h_in - pp.eta_machines * (h_in - iso.h)
         W_expander = F_exp * (h_in - h_exp_out)
 
-        # T-100: the equilibrium first, since the crr recycle is overhead vapour.
+        # T-100: the equilibrium first, since the crr recycle is overhead vapor.
         eq = equilibrium_batch(self.column, eos, s["x"], s["x_B"], s["P_top"] * KPA,
                                T0=self._start("column_T", m, xp))
         if keep:

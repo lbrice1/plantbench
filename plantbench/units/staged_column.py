@@ -106,7 +106,7 @@ def weir_constants(L_weir: float, A_tray: float, h_weir: float,
 def equilibrium(spec: ColumnSpec, thermo: Thermo, x, x_B, P_top: float, T0=None):
     """Stage and reboiler pressures, temperatures and vapor compositions: the part of
     `evaluate` that depends on the state alone, for a caller that needs the overhead
-    vapour before it can compute the feeds."""
+    vapor before it can compute the feeds."""
     P, T, y = equilibrium_batch(spec, thermo, x[None], x_B[None], P_top,
                                 T0=None if T0 is None else T0[None])
     return P[0], T[0], y[0]
@@ -158,7 +158,7 @@ def evaluate_batch(spec: ColumnSpec, thermo: Thermo, M, x, M_B, x_B, P_top,
     P, T, y = eq if eq is not None else equilibrium_batch(spec, thermo, x, x_B, P_top, T0)
     x_all = xp.concatenate([x, x_B[:, None]], axis=1)
     h_L = thermo.h(T.reshape(-1), P.reshape(-1), x_all.reshape(-1, nc), "liquid").reshape(m, n + 1)
-    h_V = thermo.h(T.reshape(-1), P.reshape(-1), y.reshape(-1, nc), "vapour").reshape(m, n + 1)
+    h_V = thermo.h(T.reshape(-1), P.reshape(-1), y.reshape(-1, nc), "vapor").reshape(m, n + 1)
 
     L = weir_flow(M, spec)  # leaving stage n for stage n + 1, the last into the reboiler
     F = xp.zeros((m, n))

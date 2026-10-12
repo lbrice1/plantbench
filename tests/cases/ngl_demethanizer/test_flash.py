@@ -13,11 +13,11 @@ from plantbench.cases.ngl_demethanizer.components import equation_of_state
 FIXTURE = Path(__file__).parent / "fixtures" / "dew_point_flash.json"
 
 
-def test_a_flash_where_newton_once_diverged_settles_every_row_as_vapour():
+def test_a_flash_where_newton_once_diverged_settles_every_row_as_vapor():
     """Twenty rows flashed together, warm-started as the run had them.  When Rachford-Rice
     bisected its converged rows, Newton, kept iterating by the other rows, diverged on the
     row at its dew point (170.64 K), its ln K running out to about 430.  The flash must
-    settle every row as vapour, converged and without a numerical warning."""
+    settle every row as vapor, converged and without a numerical warning."""
     f = json.loads(FIXTURE.read_text())
     T, P = np.array(f["T_K"]), np.array(f["P_Pa"])
     z = np.tile(f["z"], (len(T), 1))

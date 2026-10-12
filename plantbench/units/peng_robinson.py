@@ -156,7 +156,7 @@ class Components:
 
 
 class PengRobinson:
-    """The Peng–Robinson equation on a component set, every method vectorised over a
+    """The Peng–Robinson equation on a component set, every method vectorized over a
     leading axis of states (stages): T and P of shape (N,), compositions (N, n_c).
 
     `roots` chooses how the cubic is solved: "eigen", as the eigenvalues of its companion
@@ -218,8 +218,8 @@ class PengRobinson:
 
     def _Z(self, A, B, phase):
         """The compressibility root of the phase: the smallest real root above B for a
-        liquid, the largest for a vapour.  Where one real root exists it serves both.
-        `phase` is "liquid", "vapour", or a boolean array true on the liquid rows."""
+        liquid, the largest for a vapor.  Where one real root exists it serves both.
+        `phase` is "liquid", "vapor", or a boolean array true on the liquid rows."""
         c2 = -(1.0 - B)
         c1 = A - 3.0 * B**2 - 2.0 * B
         c0 = -(A * B - B**2 - B**3)
@@ -238,7 +238,7 @@ class PengRobinson:
         return a, da, b, sum_j, A, B, Z, L
 
     def _stack(self, T, P, x, y):
-        """Liquid x and vapour y at the same T and P as one stack of 2N rows, liquid
+        """Liquid x and vapor y at the same T and P as one stack of 2N rows, liquid
         first, with the phase of each row.  Every row's arithmetic is the one it has on
         its own; the stack halves the number of array operations, which is what one
         evaluation on a GPU costs."""
@@ -248,7 +248,7 @@ class PengRobinson:
                 xp.arange(2 * n) < n)
 
     def _stacks(self, T) -> bool:
-        """Whether liquid and vapour are evaluated as one stack.  A single row is not, on
+        """Whether liquid and vapor are evaluated as one stack.  A single row is not, on
         the host: BLAS forms x @ b_i for one row by a dot product and for two by a
         matrix-vector product, which differ in the last bit, and a serial evaluation is
         to stay as it was."""
@@ -257,16 +257,16 @@ class PengRobinson:
     # -- properties ------------------------------------------------------------------
 
     def ln_phi(self, T, P, x, phase):
-        """Log fugacity coefficients, (N, n_c).  `phase` is "liquid", "vapour", or a
+        """Log fugacity coefficients, (N, n_c).  `phase` is "liquid", "vapor", or a
         boolean array true on the liquid rows."""
         if self._use_kernels:
             return _kernels.ln_phi(self, T, P, x, phase)
         return self._ln_phi(self._state(T, P, x, phase))
 
     def _ln_phi_pair(self, T, P, x, y):
-        """Log fugacity coefficients of liquid x and of vapour y at the same T and P."""
+        """Log fugacity coefficients of liquid x and of vapor y at the same T and P."""
         if not self._stacks(T):
-            return self.ln_phi(T, P, x, "liquid"), self.ln_phi(T, P, y, "vapour")
+            return self.ln_phi(T, P, x, "liquid"), self.ln_phi(T, P, y, "vapor")
         n = len(T)
         ln_phi = self.ln_phi(*self._stack(T, P, x, y))
         return ln_phi[:n], ln_phi[n:]
@@ -321,7 +321,7 @@ class PengRobinson:
         return self.s_ideal(T, P, x) + self.s_departure(T, P, x, phase)
 
     def K(self, T, P, x, y):
-        """Equilibrium ratios for liquid x and vapour y, (N, n_c)."""
+        """Equilibrium ratios for liquid x and vapor y, (N, n_c)."""
         xp = self.xp
         ln_phi_L, ln_phi_V = self._ln_phi_pair(T, P, x, y)
         return xp.exp(ln_phi_L - ln_phi_V)
@@ -396,14 +396,14 @@ class PengRobinson:
         Newton on ln K once substitution has brought it close, and continues by
         substitution if Newton does not settle it.  Starts from Wilson's K or from `K0`.
 
-        A row converging to a vapour fraction far outside [0, 1] is one phase.  Neither
+        A row converging to a vapor fraction far outside [0, 1] is one phase.  Neither
         convergence to the trivial solution K = 1 nor a fraction far outside [0, 1] that
         does not converge shows the same (Michelsen, 1982).  Those rows, and only those,
         are given the tangent-plane test (`_stability`): a stable one is one phase, and an
         unstable one is flashed again from the K of its trial phase; one that comes back
         to the trivial solution raises an error.  `stability=False` leaves the test out.
 
-        Returns the `Flash` of each row: vapour fraction clipped to [0, 1], phase
+        Returns the `Flash` of each row: vapor fraction clipped to [0, 1], phase
         compositions, K-values and the molar enthalpy and entropy of the whole.
         """
         xp = self.xp
@@ -493,7 +493,7 @@ class PengRobinson:
         """The tangent-plane test of each feed z as one phase (Michelsen, 1982).
 
         The feed takes the root of lower Gibbs energy, as `_liquid_like` chooses, and
-        d_i = ln z_i + ln phi_i(z).  From two trial phases, vapour-like W = z K and
+        d_i = ln z_i + ln phi_i(z).  From two trial phases, vapor-like W = z K and
         liquid-like W = z / K with Wilson's K, successive substitution on
         ln W_i = d_i - ln phi_i(w), w = W / sum W, finds the stationary points of
         tm = 1 + sum W_i (ln W_i + ln phi_i(w) - d_i - 1), the tangent-plane distance
@@ -503,7 +503,7 @@ class PengRobinson:
         where it is, since tm < 0 anywhere shows instability.
 
         Returns whether each row is unstable, and K from the trial of lower tm: w / z for
-        the vapour-like trial, z / w for the liquid-like one, 1 for a component absent
+        the vapor-like trial, z / w for the liquid-like one, 1 for a component absent
         from the feed.
         """
         xp = self.xp
@@ -513,7 +513,7 @@ class PengRobinson:
         d = xp.log(zs) + self.ln_phi(T, P, z, self._liquid_like(T, P, z))
         lnKw = xp.log(self.wilson_K(T, P))
         T2, P2, z2, d2, present2 = (xp.concatenate([v, v]) for v in (T, P, zs, d, present))
-        liquid = xp.arange(2 * n) >= n  # the vapour-like trials first
+        liquid = xp.arange(2 * n) >= n  # the vapor-like trials first
         lnW = xp.log(z2) + xp.concatenate([lnKw, -lnKw])
         active = xp.ones(2 * n, dtype=bool)
         for _ in range(max_iter):
@@ -532,10 +532,10 @@ class PengRobinson:
         ln_phi = self.ln_phi(T2, P2, w, liquid)
         terms = xp.where(present2, W * (lnW + ln_phi - d2 - 1.0), 0.0)
         tm = xp.where(_collapsed(w, z2, present2), xp.inf, 1.0 + xp.sum(terms, axis=1))
-        vapour_trial = tm[:n] <= tm[n:]
-        tm_min = xp.where(vapour_trial, tm[:n], tm[n:])
+        vapor_trial = tm[:n] <= tm[n:]
+        tm_min = xp.where(vapor_trial, tm[:n], tm[n:])
         lnw = xp.log(w)
-        lnK = xp.where(vapour_trial[:, None], lnw[:n] - xp.log(zs), xp.log(zs) - lnw[n:])
+        lnK = xp.where(vapor_trial[:, None], lnw[:n] - xp.log(zs), xp.log(zs) - lnw[n:])
         K = xp.where(present, xp.exp(lnK), 1.0)
         return tm_min < -1e-8, K
 
@@ -550,9 +550,9 @@ class PengRobinson:
         """Newton on g(ln K) = ln K - substitute(ln K) = 0, its Jacobian by forward
         differences evaluated as extra rows of one batch.
 
-        Returns ln K, the vapour fraction, and the rows it settled: those whose last step
+        Returns ln K, the vapor fraction, and the rows it settled: those whose last step
         was below 1e-6, after which Newton, its Jacobian accurate to about 1e-7, leaves an
-        error of order 1e-12, and those ending one phase (a vapour fraction outside (0, 1)), whose
+        error of order 1e-12, and those ending one phase (a vapor fraction outside (0, 1)), whose
         properties do not depend on K.  A row whose ln K leaves `_LNK_BOUND` has diverged;
         it is held where it was and not settled."""
         xp = self.xp
@@ -583,19 +583,19 @@ class PengRobinson:
         xp = self.xp
         x, y = _phases(z, K, beta)
         # A row that is one phase, or that converged to the trivial solution K = 1, is
-        # all liquid or all vapour, as `_liquid_like` decides, as `thermo` does.  The sign
+        # all liquid or all vapor, as `_liquid_like` decides, as `thermo` does.  The sign
         # of the negative flash's fraction is not used: beside the trivial solution, where
         # a dense feed with one real root converges, it is meaningless.
         trivial = xp.max(xp.abs(xp.log(K)), axis=1) < 1e-4
         one = (beta <= 0.0) | (beta >= 1.0) | trivial
         liquid = one & self._liquid_like(T, P, z)
-        vapour = one & ~liquid
-        V = xp.where(liquid, 0.0, xp.where(vapour, 1.0, beta))
+        vapor = one & ~liquid
+        V = xp.where(liquid, 0.0, xp.where(vapor, 1.0, beta))
         x = xp.where(liquid[:, None], z, x)
-        y = xp.where(vapour[:, None], z, y)
+        y = xp.where(vapor[:, None], z, y)
         if not self._stacks(T):
-            h = (1 - V) * self.h(T, P, x, "liquid") + V * self.h(T, P, y, "vapour")
-            s = (1 - V) * self.s(T, P, x, "liquid") + V * self.s(T, P, y, "vapour")
+            h = (1 - V) * self.h(T, P, x, "liquid") + V * self.h(T, P, y, "vapor")
+            s = (1 - V) * self.s(T, P, x, "liquid") + V * self.s(T, P, y, "vapor")
             return Flash(T=T, P=P, V=V, x=x, y=y, K=K, h=h, s=s)
         # The h and s of each phase, as `h` and `s` give them, from one stacked state.
         n = len(T)
@@ -735,7 +735,7 @@ def _phases(z, K, beta):
 def _rachford_rice(z, K, beta0, tol: float = 1e-14, max_iter: int = 100):
     """The vapor fraction solving sum z (K - 1) / (1 + beta (K - 1)) = 0, by Newton kept
     inside the interval where every denominator is positive, which extends beyond [0, 1]
-    for the negative flash.  A row whose K are all above 1 has no root and is all vapour
+    for the negative flash.  A row whose K are all above 1 has no root and is all vapor
     (returned as 2); all below 1, all liquid (returned as -1).  Only the components
     present in z count: an absent one has no term in the sum, and its K, which may be
     anything, would otherwise set a false end of the interval.  Each row stops once it
@@ -779,7 +779,7 @@ def _rachford_rice(z, K, beta0, tol: float = 1e-14, max_iter: int = 100):
 def _select_root(real, c2, c1, c0, B, phase):
     """The compressibility root of each row from the real roots of its cubic, (N, k), the
     near-double roots among them: the smallest above B for a liquid and the largest for a
-    vapour, polished by two Newton steps on the cubic.  The eigenvalues carry
+    vapor, polished by two Newton steps on the cubic.  The eigenvalues carry
     round-off that finite-difference Jacobians of the right-hand side would see as noise.
     A step is taken only where it does not increase the residual, since at a double root
     the derivative vanishes with it and the step is 0/0 or runs off."""

@@ -106,7 +106,7 @@ def test_the_fugacity_row_compiled_for_the_host_is_the_numpy_one(eos, rows, host
         _assert_same(out, eos.ln_phi(T, P, x, liquid), rtol=1e-10)
 
 
-@pytest.mark.parametrize("phase", ["liquid", "vapour"])
+@pytest.mark.parametrize("phase", ["liquid", "vapor"])
 def test_the_root_selection_compiled_for_the_host_is_the_numpy_one(host, phase, double_roots):
     """On cubics with double and triple roots: the right root, as NumPy finds it.  The
     two agree there only to the accuracy to which the coefficients determine the root,
@@ -144,7 +144,7 @@ def test_a_flash_of_the_rows_on_the_host_is_finite(eos, rows):
     assert np.all(f.x >= 0.0) and np.all(f.y >= 0.0)
 
 
-@pytest.mark.parametrize("phase", ["liquid", "vapour", "rows"])
+@pytest.mark.parametrize("phase", ["liquid", "vapor", "rows"])
 @pytest.mark.gpu
 @pytest.mark.skipif(not backend.available("cuda"), reason="no CuPy or no GPU")
 def test_the_state_and_fugacities_on_the_device_are_the_numpy_ones(eos, rows, phase):

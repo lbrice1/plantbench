@@ -32,7 +32,7 @@ def test_the_equation_of_state_on_the_device_is_the_one_on_the_host(setup):
     Td, yd = dev.bubble_T(backend.to_device(P, "cuda"), backend.to_device(x, "cuda"))
     np.testing.assert_allclose(backend.to_host(Td), T, rtol=1e-12)
     np.testing.assert_allclose(backend.to_host(yd), y, rtol=1e-10, atol=1e-14)
-    for phase, comp in (("liquid", x), ("vapour", y)):
+    for phase, comp in (("liquid", x), ("vapor", y)):
         np.testing.assert_allclose(
             backend.to_host(dev.h(Td, backend.to_device(P, "cuda"), backend.to_device(comp, "cuda"), phase)),
             host.h(T, P, comp, phase), rtol=1e-11, atol=1e-8)

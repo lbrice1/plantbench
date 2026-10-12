@@ -93,7 +93,7 @@ def test_the_enthalpy_table_is_exact_to_a_millijoule(comps):
 
 def test_a_temperature_outside_the_table_is_refused(pr):
     with pytest.raises(ValueError, match="outside the enthalpy table"):
-        pr.h(np.array([30.0]), np.array([1e5]), np.array([_x("feed")]), "vapour")
+        pr.h(np.array([30.0]), np.array([1e5]), np.array([_x("feed")]), "vapor")
 
 
 def _two_phase_feed(pr):
@@ -161,9 +161,9 @@ def test_a_double_or_triple_root_is_the_liquid_root(solve, double_roots):
     B = np.zeros_like(a)
     with np.errstate(all="ignore"):
         liquid = prm._select_root(solve(c2, c1, c0), c2, c1, c0, B, "liquid")
-        vapour = prm._select_root(solve(c2, c1, c0), c2, c1, c0, B, "vapour")
+        vapor = prm._select_root(solve(c2, c1, c0), c2, c1, c0, B, "vapor")
     assert np.all(np.abs(liquid - a) <= tol)
-    assert np.all(np.abs(vapour - b) <= tol)
+    assert np.all(np.abs(vapor - b) <= tol)
 
 
 def test_the_double_root_check_is_skipped_only_where_it_finds_none():
@@ -205,12 +205,12 @@ def test_a_close_complex_pair_is_not_taken_for_a_root():
 def test_flashes_agree_with_thermo_over_random_feeds(pr, comps, absent):
     """Random feeds of the seven components over 140 to 330 K and 0.3 to 7.5 MPa, and
     the same without nitrogen and, in every other feed, without n-hexane: the same
-    phases as `thermo`, which tests stability, and the same vapour fraction, to
+    phases as `thermo`, which tests stability, and the same vapor fraction, to
     `thermo`'s own tolerance (agreement is to about 1e-7).  A row is not to be taken
-    for one phase from a vapour fraction of Wilson's K, which is outside [0, 1] on many
-    of these two-phase feeds, and a one-phase row is labelled as `thermo` labels it.
+    for one phase from a vapor fraction of Wilson's K, which is outside [0, 1] on many
+    of these two-phase feeds, and a one-phase row is labeled as `thermo` labels it.
     Feeds `thermo` splits into two liquids are left out: our flash labels the lighter
-    of those phases vapour."""
+    of those phases vapor."""
     rng = np.random.default_rng(1)
     n = 300
     z = rng.dirichlet(np.full(len(NAMES), 0.7), n)
@@ -269,7 +269,7 @@ def test_the_stability_test_finds_the_two_phase_feeds(pr):
 
 def test_rachford_rice_ignores_absent_components_and_the_batch(pr):
     """Two feeds without nitrogen, one with its root beside the end of the interval that
-    nitrogen's K would set: each gets the same vapour fraction in a batch as alone, and
+    nitrogen's K would set: each gets the same vapor fraction in a batch as alone, and
     the batch flashes.  Nitrogen's K counted, the first row ended on that false pole and,
     iterated on while the second converged, gave NaN for both."""
     K = np.array([[10.395195, 4.359806, 1.163768, 0.483217, 0.19472, 0.087131, 0.02935],
