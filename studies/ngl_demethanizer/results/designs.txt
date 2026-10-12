@@ -1,5 +1,5 @@
 THE DESIGN POINTS OF THE THREE SCHEMES
-analyzed at 8728792 dirty with plantbench 0.2.1, Python 3.14.7, NumPy 2.5.3, SciPy 1.18.1, scikit-learn 1.9.1, pacmap 0.9.1, hdbscan 0.8.44
+analyzed at b6bdd67 dirty with plantbench 0.2.1, Python 3.14.7, NumPy 2.5.3, SciPy 1.18.1, scikit-learn 1.9.1, pacmap 0.9.1, hdbscan 0.8.44
 
                                       conventional           gsp           crr
 TK-100 temperature, C                       -40.03        -44.21        -44.81
