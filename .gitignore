@@ -39,3 +39,6 @@ docs/apidocs/
 # Slurm output of the Della jobs in benchmarks/
 pb-bench-*.out
 pb-profile-*.out
+
+# The working backlog of open items, kept locally.
+BACKLOG.md
