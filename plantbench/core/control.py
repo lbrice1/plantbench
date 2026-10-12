@@ -29,7 +29,7 @@ from scipy.integrate import solve_ivp
 from plantbench.backend import check as check_device
 from plantbench.backend import clamp, module, namespace, to_device, to_host
 
-from .instruments import Actuator, Instrument
+from .instruments import Actuator, Instrument, stack_actuators, stack_instruments
 
 # How the Jacobian of the closed loop is formed; see `integrate`.
 JACOBIANS = ("internal", "batched")
@@ -218,6 +218,8 @@ def _scheduled(element, t: float):
     """The element with the set-point changes in force at time t applied."""
     if not isinstance(element, Loop) or not element.sp_schedule:
         return element
+    if isinstance(element.sp_schedule, StackedSchedule):
+        return replace(element, setpoint=element.setpoint + element.sp_schedule.at(t))
     active = [change for time, change in element.sp_schedule if t >= time]
     return replace(element, setpoint=element.setpoint + sum(active)) if active else element
 
@@ -302,6 +304,144 @@ def _jacobian_callback(design, structure, disturbance, device: str):
         return to_host(jacobian_batched(t, to_device(y, device), *args))
 
     return jac
+
+
+# --------------------------------------------------------------------------------
+# The closed loop of an ensemble
+# --------------------------------------------------------------------------------
+#
+# The members of an ensemble share a design and the layout of their structures, and
+# differ in tunings, set-points, instruments, actuators and disturbances, and in where
+# they are in time.  `stack` holds the members' parameters as arrays of one value per
+# member; `take` repeats them over the rows of an evaluation, one row per member for a
+# step and n + 1 per member for a Jacobian.  The design's right-hand side must not depend
+# on t, which is then an array of one time per row.
+
+# The fields of a loop or a ratio station that may differ between members.
+_LOOP_FIELDS = ("Kc", "tau_I", "setpoint", "bias", "lo", "hi")
+_RATIO_FIELDS = ("ratio", "lo", "hi")
+
+
+@dataclass(frozen=True)
+class StackedSchedule:
+    """The set-point changes of several members, (members, k) arrays of times and
+    changes, padded with changes of zero at infinite times."""
+
+    times: Any
+    changes: Any
+
+    def at(self, t):
+        """The sum of the changes in force at t, one time per row."""
+        return (self.changes * (t[..., None] >= self.times)).sum(axis=-1)
+
+    def take(self, rows) -> StackedSchedule:
+        return StackedSchedule(self.times[rows], self.changes[rows])
+
+
+def layout_signature(structure: Structure) -> tuple:
+    """What members must share to be stacked: the elements' kinds, names and manipulated
+    variables, and the augmented-state layout."""
+    slots, n_aug = state_layout(structure)
+    kinds = tuple((type(e).__name__, e.name, e.mv) for e in structure)
+    return kinds, tuple((s[0].stop - s[0].start, s[1].stop - s[1].start) for s in slots), n_aug
+
+
+def stack(structures: list[Structure], xp=np) -> Structure:
+    """One structure for the members `structures`, each field that may differ held as an
+    array of one value per member, on the array module `xp`.
+
+    The members must have been built from one design by one case, so that a measure of a
+    given loop name is the same function of the state in every member; the first
+    member's is kept.  Raises when their layouts differ (`layout_signature`)."""
+    first = structures[0]
+    signature = layout_signature(first)
+    for s in structures[1:]:
+        if layout_signature(s) != signature:
+            raise ValueError("the members' control structures differ in their elements or "
+                             "their state layout and cannot be stacked")
+    out = []
+    for k, element in enumerate(first):
+        members = [s[k] for s in structures]
+        names = _LOOP_FIELDS if isinstance(element, Loop) else _RATIO_FIELDS
+        changes = {f: xp.asarray([getattr(m, f) for m in members], dtype=float) for f in names}
+        if isinstance(element, Loop):
+            changes["instrument"] = stack_instruments([m.instrument for m in members], xp)
+            changes["sp_schedule"] = _stack_schedules([m.sp_schedule for m in members], xp)
+        changes["actuator"] = stack_actuators([m.actuator for m in members], xp)
+        out.append(replace(element, **changes))
+    return out
+
+
+def _stack_schedules(schedules, xp):
+    k = max(len(s) for s in schedules)
+    if k == 0:
+        return ()
+    times = np.full((len(schedules), k), np.inf)
+    changes = np.zeros((len(schedules), k))
+    for i, s in enumerate(schedules):
+        for j, (t, dv) in enumerate(s):
+            times[i, j], changes[i, j] = t, dv
+    return StackedSchedule(xp.asarray(times), xp.asarray(changes))
+
+
+def take(stacked: Structure, rows) -> Structure:
+    """The stacked structure with each member's values repeated over its rows: `rows` is
+    the member of each row, an integer array on the structure's device."""
+    out = []
+    for element in stacked:
+        names = _LOOP_FIELDS if isinstance(element, Loop) else _RATIO_FIELDS
+        changes = {f: getattr(element, f)[rows] for f in names}
+        if isinstance(element, Loop):
+            if element.instrument is not None:
+                changes["instrument"] = element.instrument.take(rows)
+            if element.sp_schedule:
+                changes["sp_schedule"] = element.sp_schedule.take(rows)
+        if element.actuator is not None:
+            changes["actuator"] = element.actuator.take(rows)
+        out.append(replace(element, **changes))
+    return out
+
+
+def ensemble_inputs(t_members: np.ndarray, disturbances, u0, rows, xp=np):
+    """The inputs of every row: each member's disturbance at its own time, applied to the
+    nominal inputs `u0` on the host, then repeated over the member's `rows` (a host integer
+    array) and moved to `xp`.  A member whose disturbance is None takes `u0`."""
+    members = [u0 if d is None else d(float(t), u0) for t, d in zip(t_members, disturbances)]
+    fields = {}
+    for f in dataclasses.fields(u0):
+        values = [getattr(u, f.name) for u in members]
+        if all(v is None for v in values):
+            fields[f.name] = None
+            continue
+        fields[f.name] = xp.asarray(np.asarray(values, dtype=float)[rows])
+    return replace(u0, **fields)
+
+
+def ensemble_rhs(t_rows, Y, stacked_rows: Structure, inputs, pp, model):
+    """The closed loop at m states, one time per row, Y (m, n + n_aug), with the structure
+    and the inputs already taken over the rows (`take`, `ensemble_inputs`)."""
+    xp = namespace(Y)
+    n = Y.shape[-1] - n_augmented(stacked_rows)
+    X, aug = Y[:, :n], Y[:, n:]
+    u, d_integ = apply(stacked_rows, X, aug, inputs, pp, t_rows)
+    return xp.concatenate([model(t_rows, X, u, pp), d_integ], axis=1)
+
+
+def ensemble_jacobian(t_rows, y, stacked_rows: Structure, inputs, pp, model):
+    """The Jacobians of k members at states y (k, n) by forward differences, as
+    `jacobian_batched` forms each, in one evaluation of k (n + 1) rows.  The structure,
+    the inputs and `t_rows` are taken over those rows, n + 1 per member in member order.
+    Returns (k, n, n)."""
+    xp = namespace(y)
+    k, n = y.shape
+    h = _FD_STEP * xp.maximum(xp.abs(y), 1.0)
+    h = (y + h) - y
+    Y = xp.empty((k, n + 1, n))
+    Y[:, 0] = y
+    Y[:, 1:] = y[:, None, :] + h[:, :, None] * xp.eye(n)
+    F = ensemble_rhs(t_rows, Y.reshape(k * (n + 1), n), stacked_rows, inputs, pp, model)
+    F = F.reshape(k, n + 1, n)
+    return ((F[:, 1:] - F[:, :1]) / h[:, :, None]).transpose(0, 2, 1)
 
 
 class WallTimeExceeded(RuntimeError):
