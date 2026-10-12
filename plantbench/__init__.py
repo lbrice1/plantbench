@@ -39,5 +39,12 @@ def run(case: str | Case, config: Config | dict | None = None, t_end: float = 15
     return _case.run(case, case.config() if config is None else config, t_end, **kwargs)
 
 
+def run_ensemble(case: str | Case, configs: list, t_end: float = 1500.0,
+                 **kwargs) -> list[_case.MemberResult]:
+    """Simulate configurations of a case as ensembles in lockstep; keyword arguments go to
+    `core.case.run_ensemble`."""
+    return _case.run_ensemble(_resolve(case), list(configs), t_end, **kwargs)
+
+
 __all__ = ["Case", "Config", "Setup", "Trajectory", "build", "case", "list_cases", "load_case",
-           "register", "run", "__version__"]
+           "register", "run", "run_ensemble", "__version__"]

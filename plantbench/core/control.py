@@ -444,6 +444,39 @@ def ensemble_jacobian(t_rows, y, stacked_rows: Structure, inputs, pp, model):
     return ((F[:, 1:] - F[:, :1]) / h[:, :, None]).transpose(0, 2, 1)
 
 
+def batch_outputs(design, structure: Structure, disturbance, t: np.ndarray, Y: np.ndarray,
+                  measurements: dict[str, Callable]) -> tuple[dict, dict]:
+    """The inputs and the measurements of one run at its grid points, as `integrate`
+    records them, but in one batched evaluation: `Y` (n_times, n + n_aug) holds the
+    closed-loop states at times `t`.  The design and the measures must accept a batch.
+    Rows that are not finite, those after a member stopped, are NaN."""
+    n = len(design.x)
+    ok = np.flatnonzero(np.isfinite(Y).all(axis=1))
+    m = ok.size
+    S = take(stack([structure]), np.zeros(m, dtype=int))
+    inputs = ensemble_inputs(t[ok], [disturbance] * m, design.u, np.arange(m))
+    u, _ = apply(S, Y[ok, :n], Y[ok, n:], inputs, design.pp, t[ok])
+
+    def full(v):
+        out = np.full(len(t), np.nan)
+        out[ok] = np.broadcast_to(to_host(v), (m,))
+        return out
+
+    U: dict[str, np.ndarray] = {}
+    for f in dataclasses.fields(u):
+        v = getattr(u, f.name)
+        if v is None:
+            U[f.name] = np.full(len(t), np.nan)
+        elif np.ndim(v) <= 1:
+            U[f.name] = full(v)
+        else:
+            for k in range(v.shape[1]):
+                U[f"{f.name}[{k}]"] = full(v[:, k])
+    U.update({name: full(g(u)) for name, g in getattr(design, "derived", {}).items()})
+    Ym = {name: full(g(Y[ok, :n], u, design.pp)) for name, g in measurements.items()}
+    return U, Ym
+
+
 class WallTimeExceeded(RuntimeError):
     """A run stopped because it exceeded its wall-clock budget."""
 
