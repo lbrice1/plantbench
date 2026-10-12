@@ -54,3 +54,16 @@ def test_a_run_on_the_device_agrees_with_one_on_the_host(setup):
     host = pb.run(case, config, t_end=3.0, dt=0.5, jacobian="batched")
     dev = pb.run(case, config, t_end=3.0, dt=0.5, jacobian="batched", device="cuda")
     assert np.max(np.abs(dev.x - host.x) / (1e-6 + np.abs(host.x))) < 1e-6
+
+
+def test_an_ensemble_on_the_device_agrees_with_one_on_the_host(setup):
+    from plantbench.core.ensemble import integrate_ensemble
+    case, s = setup
+    d = s.design
+    S = [s.structure, ctl.with_tuning(s.structure, {"stage 4 temperature": {"Kc": -0.4}})]
+    ds = [None, pb.build(case, case.config(disturbance={"name": "feed ethane",
+                                                        "fraction": 0.1, "t": 0.5})).disturbance]
+    host = integrate_ensemble(d, S, ds, 2.0, n_points=5)
+    dev = integrate_ensemble(d, S, ds, 2.0, n_points=5, device="cuda")
+    assert host.status == dev.status == ["ok", "ok"]
+    assert np.max(np.abs(dev.Y - host.Y) / (1e-6 + np.abs(host.Y))) < 1e-9

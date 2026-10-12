@@ -1,17 +1,23 @@
-"""The closed loop of an ensemble: members with their own tunings, set-points,
-instruments, actuators, disturbances and times, evaluated as one batch.
+"""The closed loop of an ensemble, members with their own tunings, set-points,
+instruments, actuators, disturbances and times evaluated as one batch, and its
+integration by Rodas5P.
 
 The plant is the two-tank toy of `tests/_tanks.py`.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import ClassVar
+
 import numpy as np
 import pytest
 from _tanks import tanks_design, tanks_structure
+from scipy.integrate import solve_ivp
 
 from plantbench.core import control as ctl
 from plantbench.core import disturbances as dist
+from plantbench.core.ensemble import integrate_ensemble
 from plantbench.core.instruments import Actuator, Instrument
 
 
@@ -108,3 +114,82 @@ def test_members_with_different_layouts_are_refused(design):
         ctl.stack([base, lagged])
     with pytest.raises(ValueError, match="state layout"):
         ctl.stack([base, base[:2]])
+
+
+# ------------------------------------------------------------------------------------
+# The integrator
+# ------------------------------------------------------------------------------------
+
+
+@dataclass
+class _NoInputs:
+    pass
+
+
+@dataclass
+class _VanDerPol:
+    x: np.ndarray
+    u: _NoInputs
+    pp: None = None
+    batched: ClassVar[bool] = True
+
+    def rhs(self, t, x, u, pp):
+        return np.stack([x[..., 1], (1.0 - x[..., 0] ** 2) * x[..., 1] - x[..., 0]], axis=-1)
+
+
+def test_rodas5p_converges_at_fifth_order():
+    """At a tolerance every step passes, the steps grow to the grid spacing and stay there,
+    so the error at the end measures the order of the method."""
+    design = _VanDerPol(x=np.array([2.0, 0.0]), u=_NoInputs())
+    ref = solve_ivp(lambda t, y: design.rhs(t, y, None, None), (0.0, 1.0), design.x,
+                    method="DOP853", rtol=1e-14, atol=1e-14).y[:, -1]
+    errors = []
+    for n in (10, 20, 40):
+        r = integrate_ensemble(design, [[]], [None], 1.0, n_points=n + 1, rtol=1.0, atol=1.0)
+        errors.append(np.max(np.abs(r.Y[0, -1] - ref)))
+    rates = np.log2(np.array(errors[:-1]) / np.array(errors[1:]))
+    assert np.all(rates > 4.5), (errors, rates)
+
+
+def _lsoda(design, S, d, t_end, n_points):
+    return ctl.integrate(design, S, t_end, d, n_points=n_points,
+                         breakpoints=ctl.breakpoints_of(d, S))
+
+
+def test_members_agree_with_their_lsoda_runs(design):
+    structures = _members(design)
+    ds = _disturbances()
+    ds[0] = dist.ramp("d", value=0.3, t=1.5, duration=2.0)
+    r = integrate_ensemble(design, structures, ds, 10.0, n_points=41)
+    assert r.status == ["ok"] * 4
+    n = len(design.x)
+    for i, (S, d) in enumerate(zip(structures, ds)):
+        ref = _lsoda(design, S, d, 10.0, 41)
+        np.testing.assert_array_equal(r.t, ref.t)
+        X = r.Y[i, :, :n].T
+        assert np.max(np.abs(X - ref.X) / (1.0 + np.abs(ref.X))) < 1e-6, i
+    assert np.all(r.jacobians == r.steps)
+
+
+def test_a_failing_member_stops_and_the_others_finish(design):
+    S = tanks_structure(design)
+    poison = dist.step("d", value=np.nan, t=2.0)
+    r = integrate_ensemble(design, [S, S, S], [None, poison, dist.step("d", value=0.1, t=1.0)],
+                           5.0, n_points=11)
+    assert r.status == ["ok", "failed", "ok"]
+    assert "round-off" in r.message[1]
+    assert np.isnan(r.Y[1, -1]).all() and np.isfinite(r.Y[1, :5]).all()
+    assert np.isfinite(r.Y[[0, 2]]).all()
+
+
+def test_the_wall_budget_stops_every_member(design):
+    S = tanks_structure(design)
+    r = integrate_ensemble(design, [S, S], [None, None], 5.0, n_points=11, wall_budget=0.0)
+    assert r.status == ["timeout", "timeout"]
+
+
+def test_the_design_must_declare_a_batch(design):
+    from _toy import toy_design, toy_loop
+    toy = toy_design()
+    with pytest.raises(ValueError, match="batched"):
+        integrate_ensemble(toy, [ctl.bias_from_design([toy_loop()], toy)], [None], 1.0)
