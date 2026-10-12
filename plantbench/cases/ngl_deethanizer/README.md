@@ -23,7 +23,7 @@ In `parameters.py`, each constant carries its source: `[H]` for the HYSYS case, 
 | Feed valve VLV-100 and FIC-100 | A valve that FIC-100 moves to hold 625 kmol/h | The feed flow is an input | The flow is the throughput and a disturbance; the valve adds a loop on an input |
 | Reflux and FIC-101 | A flow loop, its set-point from TIC-101, with an integral time of 0.0088 s | The reflux flow is an input, written by TIC-101 | The loop is three orders of magnitude faster than any other |
 | Heater E-100 | A 0.1 m³ dynamic heater | One well-mixed volume whose outlet temperature is a state | TIC-102 then reads a state, not a quantity algebraic in its own manipulated variable |
-| Condenser | A 2 m³ total condenser with vapour and liquid holdup | A drum liquid at its bubble point, with the top pressure carried by one lumped vapour inventory of the column and the drum | The smallest change that keeps the pressure loop |
+| Condenser | A 2 m³ total condenser with vapor and liquid holdup | A drum liquid at its bubble point, with the top pressure carried by one lumped vapor inventory of the column and the drum | The smallest change that keeps the pressure loop |
 | Stage pressures | The dynamic profile, 2453 to 2475 kPa | As reported; the reboiler at the stage 30 pressure | The report places the bottoms and the boil-up below stage 30, which its integer rounding cannot account for |
 | Stages | Ideal, efficiency 1 | Ideal | As HYSYS |
 | Product valves | Rigorous Fisher valves, Cv 18 and 29 | Linear in opening, sized to the HYSYS design openings, 44.56 % and 40.63 % | The let-down pressures, 2010 and 1790 kPa, are far enough below the column that its pressure barely moves the flows |
@@ -33,9 +33,9 @@ In `parameters.py`, each constant carries its source: `[H]` for the HYSYS case, 
 
 ## Process
 
-The feed, 625 kmol/h of 49 % ethane, 23.5 % propane, 1.1 % methane and butanes to heptane, arrives at 15 °C and 2548 kPa. It is let down to 2500 kPa and heated in E-100 to 33 °C, where it is 1 % vapour. It enters stage 15 of the 30-stage column T-100.
+The feed, 625 kmol/h of 49 % ethane, 23.5 % propane, 1.1 % methane and butanes to heptane, arrives at 15 °C and 2548 kPa. It is let down to 2500 kPa and heated in E-100 to 33 °C, where it is 1 % vapor. It enters stage 15 of the 30-stage column T-100.
 
-The overhead vapour leaves stage 1 at 2453 kPa and 2.0 °C and is totally condensed. The drum liquid, at −2.6 °C, is split between the reflux, 371 kmol/h, and the distillate, 313 kmol/h of 96 % ethane, which is let down through VLV-101 to 2010 kPa. The reboiler, at 100 °C, boils up 624 kmol/h. The bottoms, 312 kmol/h of LPG with 2 % ethane, is let down through VLV-102 to 1790 kPa.
+The overhead vapor leaves stage 1 at 2453 kPa and 2.0 °C and is totally condensed. The drum liquid, at −2.6 °C, is split between the reflux, 371 kmol/h, and the distillate, 313 kmol/h of 96 % ethane, which is let down through VLV-101 to 2010 kPa. The reboiler, at 100 °C, boils up 624 kmol/h. The bottoms, 312 kmol/h of LPG with 2 % ethane, is let down through VLV-102 to 1790 kPa.
 
 The column recovers 98.0 % of the feed's ethane in the distillate and 96.1 % of its propane in the LPG.
 
@@ -49,7 +49,7 @@ Holdups are in kmol, compositions in mole fractions, temperatures in K and press
 | `M_D`, `x_D[n_c]` | condenser drum |
 | `M[30]`, `x[30, n_c]` | the stages, top first |
 | `M_B`, `x_B[n_c]` | reboiler |
-| `P_top` | stage 1, the vapour to the condenser |
+| `P_top` | stage 1, the vapor to the condenser |
 
 The plant has 354 states.
 
@@ -169,7 +169,7 @@ The reference configuration is the design at the HYSYS set-points under `basic`.
 | Reboiler duty, kW | 2399 | 2441 |
 | Condenser duty, kW | 1598 (reported); 1754 (from its streams) | 1767 |
 | E-100 duty, kW | 420 | 396 |
-| E-100 outlet vapour fraction | 0.023 | 0.008 |
+| E-100 outlet vapor fraction | 0.023 | 0.008 |
 | Drum temperature, °C | −2.63 | −2.60 |
 | Reboiler temperature, °C | 100.30 | 100.34 |
 | Stage 28 temperature, °C | 71.16 | 71.58 |
@@ -178,8 +178,8 @@ Every stage temperature is within 0.96 K of HYSYS. The largest difference is on 
 
 The reflux, boil-up and reboiler duty are 1.1 %, 2.6 % and 1.7 % above HYSYS. Two quantities are recorded as misses:
 
-- **Condenser duty.** HYSYS reports 1598 kW, but the enthalpies of its own streams imply 1754 kW: the vapour to the condenser less the reflux and the distillate. The case's 1767 kW agrees with the second.
-- **E-100 outlet.** The feed leaves E-100 near its bubble point. There the vapour fraction is sensitive to the two implementations' differences, and the heater's enthalpy rise is 5 % smaller than HYSYS's.
+- **Condenser duty.** HYSYS reports 1598 kW, but the enthalpies of its own streams imply 1754 kW: the vapor to the condenser less the reflux and the distillate. The case's 1767 kW agrees with the second.
+- **E-100 outlet.** The feed leaves E-100 near its bubble point. There the vapor fraction is sensitive to the two implementations' differences, and the heater's enthalpy rise is 5 % smaller than HYSYS's.
 
 `studies/ngl_deethanizer/closed_loop.py` records three indicative closed-loop runs under `composition cascade`, each with a step at 10 min and run to 120 min. These are not reference results.
 
@@ -208,7 +208,7 @@ The library's contract suite runs on every structure.
 ## Limitations
 
 - **Upstream.** The feed is the HYSYS case's own, not the bottoms of `ngl_demethanizer`. The two cases do not form a train.
-- **Simplified units.** The top pressure is one lumped state, the drum is at its bubble point, the heater has no composition holdup, and the stages have no vapour holdup.
-- **Valves.** The product valves are linear and do not see the column pressure, and the feed and reflux valves are not modelled.
+- **Simplified units.** The top pressure is one lumped state, the drum is at its bubble point, the heater has no composition holdup, and the stages have no vapor holdup.
+- **Valves.** The product valves are linear and do not see the column pressure, and the feed and reflux valves are not modeled.
 - **Cost.** One right-hand side costs 6 ms. A 120 min closed-loop run after a disturbance takes 5 to 8 min.
-- **Instruments.** Measurements and valves are ideal unless instruments or actuators are configured. The composition analyser XIC-100 has no dead time.
+- **Instruments.** Measurements and valves are ideal unless instruments or actuators are configured. The composition analyzer XIC-100 has no dead time.

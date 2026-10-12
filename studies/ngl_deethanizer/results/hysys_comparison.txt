@@ -1,5 +1,5 @@
 THE DESIGN POINT AGAINST THE HYSYS CASE
-analyzed at 8728792 dirty with plantbench 0.2.1, Python 3.14.7, NumPy 2.5.3, SciPy 1.18.1, scikit-learn 1.9.1, pacmap 0.9.1, hdbscan 0.8.44
+analyzed at 144ac19 dirty with plantbench 0.2.1, Python 3.14.7, NumPy 2.5.3, SciPy 1.18.1, scikit-learn 1.9.1, pacmap 0.9.1, hdbscan 0.8.44
 
                                          HYSYS       model  difference  relative
 distillate, kmol/h                       312.7      312.67    -0.03127    -0.01%
@@ -11,13 +11,13 @@ ethane in LPG                         0.020002        0.02  -1.601e-06    -0.01%
 ethane recovery                        0.97959      0.9796   1.575e-05     0.00%
 propane recovery                       0.96004     0.96061   0.0005669     0.06%
 reflux, kmol/h                           367.4      371.44       4.043     1.10%
-vapour to condenser, kmol/h                680      684.11       4.112     0.60%
+vapor to condenser, kmol/h                 680      684.11       4.112     0.60%
 boil-up, kmol/h                          608.4      624.26       15.86     2.61%
 E-100 duty, kW                          420.25      395.99      -24.26    -5.77%
 condenser duty, kW                      1598.5      1766.8       168.4    10.53%
   condenser duty from HYSYS's streams, kW      1753.9      1766.8       12.91     0.74%
 reboiler duty, kW                         2399      2440.7       41.72     1.74%
-E-100 outlet vapour fraction             0.023   0.0082422    -0.01476   -64.16%
+E-100 outlet vapor fraction              0.023   0.0082422    -0.01476   -64.16%
 E-100 enthalpy rise, kJ/kmol              2400      2280.9      -119.1    -4.96%
 drum temperature, C                     -2.626     -2.6041     0.02193    -0.84%
 reboiler temperature, C                  100.3      100.34     0.04288     0.04%

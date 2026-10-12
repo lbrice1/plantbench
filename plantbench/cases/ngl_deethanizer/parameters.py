@@ -48,7 +48,7 @@ class DeethanizerParameters:
     F_feed: float = 625.0 / 60  # kmol/min, FIC-100 set-point
     T_feed: float = 15.0 + C  # K
     # kPa, downstream of VLV-100 (2548 kPa upstream), which FIC-100 moves to hold the
-    # flow; the flow is an input, so the valve is not modelled.
+    # flow; the flow is an input, so the valve is not modeled.
     P_feed: float = 2500.0
 
     # -- feed heater E-100 ---------------------------------------------------------------
@@ -63,13 +63,13 @@ class DeethanizerParameters:
     # -- column --------------------------------------------------------------------------
     n_stages: int = 30  # [H]
     feed_stage: int = 15  # [H] 1-based, counted from the top
-    P_top: float = 2453.0  # kPa [H] PIC-100 set-point, the vapour to the condenser
+    P_top: float = 2453.0  # kPa [H] PIC-100 set-point, the vapor to the condenser
     P_offsets: tuple = tuple(p - 2453.0 for p in _P_STAGES)  # kPa above stage 1
     weir_coeff: float = _WEIR_COEFF  # kmol/min per kmol**1.5
     holdup_weir: float = _HOLDUP_WEIR  # kmol
 
     # -- condenser -----------------------------------------------------------------------
-    # [choice] the vapour volume whose inventory carries the top pressure: the vapour
+    # [choice] the vapor volume whose inventory carries the top pressure: the vapor
     # space of the column, 30 trays of 3.38 m3 less their liquid [H], and of the drum
     # above its liquid.  Taken as an ideal gas at T_overhead, the column's mean.
     V_overhead: float = 30 * (3.381 - 0.307) + 0.55 * _V_VESSEL  # m3
@@ -86,7 +86,7 @@ class DeethanizerParameters:
     # HYSYS valves are, with the full-opening flow chosen so that the design opening is
     # HYSYS's: VLV-101 at 44.56 % passing 312.7 kmol/h, VLV-102 at 40.63 % passing
     # 312.3 kmol/h.  The let-down pressures (2010 and 1790 kPa) are far enough below the
-    # column that its pressure barely moves the flow, which is not modelled.
+    # column that its pressure barely moves the flow, which is not modeled.
     F_VLV101_max: float = 312.7 / 60 / 0.4456  # kmol/min
     F_VLV102_max: float = 312.3 / 60 / 0.4063  # kmol/min
     P_distillate: float = 2010.0  # kPa, downstream of VLV-101

@@ -16,26 +16,26 @@ In `parameters.py`, each constant carries its source: `[C]` for the paper, `[H]`
 | Item | Paper | This case | Reason |
 |---|---|---|---|
 | Design specification | TK-100 at −29.3 °C and the NGL at −9.6 °C, stated for the conventional scheme | Ethane recovery 0.82 (ERIC-100) and 1 % methane in the NGL (XIC-100), for every scheme; the TK-100 temperature is a result: −40.03 °C (conventional), −44.21 °C (gsp), −44.82 °C (crr) | The paper compares the schemes at a recovery set-point of 0.82. At −29.3 °C the case recovers 0.723 (conventional), 0.372 (gsp) and 0.337 (crr). At −40.0 °C the conventional design reproduces the paper's TK-101 and TE-100 outlet temperatures to 0.1 K, so the stated −29.3 °C is recorded as a miss |
-| Cold residue recycle | A residue recycle compressed to a "slightly higher" pressure and returned to the top | One third of the overhead, drawn before E-102, raised by K-102 from 1010 to 1036 kPa, cooled about 2 K in E-104 against the branch, entering stage 1 as vapour | Read from the HYSYS case |
-| Branch of gsp and crr | The TK-100 vapour that bypasses TE-100 | The bypass vapour and 56 % of the TK-100 liquid | Read from the HYSYS case; gsp takes the liquid share too, so that crr is gsp with the recycle |
+| Cold residue recycle | A residue recycle compressed to a "slightly higher" pressure and returned to the top | One third of the overhead, drawn before E-102, raised by K-102 from 1010 to 1036 kPa, cooled about 2 K in E-104 against the branch, entering stage 1 as vapor | Read from the HYSYS case |
+| Branch of gsp and crr | The TK-100 vapor that bypasses TE-100 | The bypass vapor and 56 % of the TK-100 liquid | Read from the HYSYS case; gsp takes the liquid share too, so that crr is gsp with the recycle |
 | Feed stages | Stages 1, 8, 26 and 30 marked; no stream assigned | Under crr: recycle on 1, branch on 2, expander on 8, TK-100 liquid on 26. Under gsp: the same with the branch on 1. Under conventional: expander on 1, TK-101 liquid on 8, TK-100 liquid on 26 | Fixed for crr by the HYSYS case; stage 30 is read as the bottom stage, not an inlet |
 | Stage 1 under crr | An equilibrium stage | An adiabatic mixing point without holdup; 29 trays | HYSYS passes no liquid from stage 1. As an equilibrium tray, its liquid was renewed at 0.05 kmol/h and accumulated heavy components over about a day, leaving the steady state undetermined |
 | Equation of state | Not stated | Peng–Robinson with the ChemSep binary interaction parameters, in NumPy (`plantbench.units.peng_robinson`) | An inference, standard for this service. `thermo` and `feos` were too slow inside the right-hand side |
 | Butanes, pentanes, hexanes | Lumps | Their normal isomers | Replacing them by the iso-isomers moves the expander outlet by 0.01 K |
 | Separator pressures | TK-100 at 4672 kPa, TK-101 at 5199 kPa | As published | The rise along the flow is unusual, but with the pressures as published the design reproduces TK-101 and the TE-100 outlet; with them exchanged it does not |
-| Column pressure | Not modelled as such | One lumped vapour inventory for the top and the overhead circuit, so that PIC-100 has a state to act on | The smallest change that keeps the pressure loop |
+| Column pressure | Not modeled as such | One lumped vapor inventory for the top and the overhead circuit, so that PIC-100 has a state to act on | The smallest change that keeps the pressure loop |
 | Machines | HYSYS rigorous, 75 % | Ideal-gas booster, K-101 and K-102, each with its own heat capacity, at 75 % | Leaves K-101 8 K below the rigorous discharge temperature |
 | Exchangers | UA given | Ten counter-current cells per exchanger, each side one temperature state | A dynamic exchanger with the published UA |
 | Tray hydraulics and holdups | Not given | Francis weirs on a 1.72 m column, with the active area and weir height as `[choice]`; the HYSYS tray geometry on the `hysys` basis | They set the dynamics, not the design point |
-| Flow transmitters | Not modelled | First-order, 0.1 min, on the NGL flow and, under crr, on the recycle and residue-gas flows | A loop reads its measurement before its manipulated variable is written, so ERIC-100 and RFIC-100 need measurements that are states (Control structures) |
+| Flow transmitters | Not modeled | First-order, 0.1 min, on the NGL flow and, under crr, on the recycle and residue-gas flows | A loop reads its measurement before its manipulated variable is written, so ERIC-100 and RFIC-100 need measurements that are states (Control structures) |
 | Tuning | Table 2, in percent of ranges the paper does not give | Retuned for damping (Control structures) | Table 2 cannot be converted without the ranges |
 
 ## Process
 
-Raw gas at 4980 kmol/h, 6015 kPa and 35 °C is cooled in the gas–gas exchanger E-100 against the residue gas, and then in the chiller E-101, a duty. It is flashed in the separator TK-100 at 4672 kPa. The TK-100 liquid is let down to the column. What happens to the TK-100 vapour depends on the scheme:
+Raw gas at 4980 kmol/h, 6015 kPa and 35 °C is cooled in the gas–gas exchanger E-100 against the residue gas, and then in the chiller E-101, a duty. It is flashed in the separator TK-100 at 4672 kPa. The TK-100 liquid is let down to the column. What happens to the TK-100 vapor depends on the scheme:
 
-- **`conventional`.** The vapour is cooled in E-102 against the overhead and flashed in the cold separator TK-101. The TK-101 vapour is expanded in the turboexpander TE-100 to the top of the column, and the TK-101 liquid enters stage 8.
-- **`gsp` (gas subcooled process).** The vapour is split at the ratio R between TE-100, which discharges to stage 8, and a branch. The branch carries the rest of the vapour and 56 % of the TK-100 liquid. It is subcooled in E-102, let down, and enters stage 1.
+- **`conventional`.** The vapor is cooled in E-102 against the overhead and flashed in the cold separator TK-101. The TK-101 vapor is expanded in the turboexpander TE-100 to the top of the column, and the TK-101 liquid enters stage 8.
+- **`gsp` (gas subcooled process).** The vapor is split at the ratio R between TE-100, which discharges to stage 8, and a branch. The branch carries the rest of the vapor and 56 % of the TK-100 liquid. It is subcooled in E-102, let down, and enters stage 1.
 - **`crr` (cold residue recycle).** As `gsp`, with the branch crossing the cold side of E-104 and entering stage 2. One third of the overhead is recompressed by K-102, cooled in E-104, and returned to stage 1.
 
 The demethanizer T-100 has 30 stages and the reboiler E-103, and no condenser. The bottoms are the NGL product. The overhead crosses E-102 and E-100, is raised by the booster on the TE-100 shaft, and then by the recompressor K-101 to the sales-gas pressure.
@@ -71,7 +71,7 @@ The plant has 308 states under `conventional`, 299 under `gsp`, 313 under `crr` 
 | `v_LCV100` | 0–1 | TK-100 liquid valve |
 | `v_LCV101` | 0–1 | TK-101 liquid valve; conventional only |
 | `v_LCV102` | 0–1 | NGL valve |
-| `split` | – | R, the TE-100 flow over the branch vapour; gsp and crr only |
+| `split` | – | R, the TE-100 flow over the branch vapor; gsp and crr only |
 | `W_K102` | kW | K-102 power; RFIC-100; crr only |
 | `liquid_split` | 0–1 | the part of the TK-100 liquid sent to the branch; gsp and crr only |
 
@@ -119,7 +119,7 @@ A negative gain means that raising the manipulated variable lowers the measureme
 | XIC-100 | 0 to 1 | 0 to 2722 kW | 1.0 | 120 |
 | RFIC-100 | 0 to 1 | 0 to 50 kW | 0.5 | 30 |
 
-ERIC-100 is tuned for this case. On the ratio it has a positive gain: at a fixed TK-100 temperature, raising R by 5 % raises the recovery by 0.0064 under both gsp and crr, because less of the TK-100 vapour goes to the branch.
+ERIC-100 is tuned for this case. On the ratio it has a positive gain: at a fixed TK-100 temperature, raising R by 5 % raises the recovery by 0.0064 under both gsp and crr, because less of the TK-100 vapor goes to the branch.
 
 The damping ratio of each structure is the smallest among the oscillatory modes of the closed loop linearized at the design point. The values below are from `studies/ngl_demethanizer/tuning.py`.
 
@@ -179,7 +179,7 @@ Under crr, `stage 1 temperature` is the temperature of the mixing point.
 |---|---|---|
 | TK-101 | −59.6 °C | −59.6 °C |
 | TE-100 outlet | −116.3 °C | −116.3 °C |
-| TE-100 outlet, vapour fraction | 0.880 | 0.891 |
+| TE-100 outlet, vapor fraction | 0.880 | 0.891 |
 | TK-100 | −29.3 °C | −40.0 °C |
 | E-100 hot outlet | −4.8 °C | −7.5 °C |
 | NGL | −9.6 °C | −8.2 °C |
@@ -187,7 +187,7 @@ Under crr, `stage 1 temperature` is the temperature of the mixing point.
 | Booster discharge | 1265 kPa | 1227 kPa |
 | K-101 discharge | 184.4 °C | 179.3 °C |
 
-The TK-100 temperature and the vapour fraction are recorded misses. The warm-end differences follow from the colder separator and the ideal-gas machines.
+The TK-100 temperature and the vapor fraction are recorded misses. The warm-end differences follow from the colder separator and the ideal-gas machines.
 
 **The paper's steady-state ordinal result** (its Section 4.1). The conventional column shows no separation at the top, where gsp and crr separate at both ends. The rise over stages 1 to 8 is 1.41 K under conventional, against 11.15 K (gsp) and 10.68 K (crr).
 
@@ -196,7 +196,7 @@ The TK-100 temperature and the vapour fraction are recorded misses. The warm-end
 - All 30 stage temperatures agree within 0.24 K.
 - The flows agree within 1 %: overhead 6621 against 6628 kmol/h, recycle 2207 against 2209, NGL 565.8 against 561.1.
 - The recovery is 0.830 against 0.820.
-- The TE-100 outlet is −97.95 °C at a vapour fraction of 0.893, against −98.07 °C and 0.894.
+- The TE-100 outlet is −97.95 °C at a vapor fraction of 0.893, against −98.07 °C and 0.894.
 - The chiller duty is 3462 against 3498 kW, and the reboiler duty 1534 against 1522 kW.
 
 Three quantities are recorded misses:
@@ -229,6 +229,6 @@ The library's contract suite runs on every structure.
 - **Refrigeration.** The propane cycle is a duty. gsp and crr need TK-100 near −44 °C, below the −42 °C at which propane boils at atmospheric pressure, so a propane chiller would run at sub-atmospheric suction; no refrigeration limit is enforced.
 - **Carbon dioxide.** It is absent from the paper's feed and zero on the `hysys` basis, so the freeze-out margin that distinguishes the schemes in practice is not represented.
 - **Separator temperature.** The conventional design runs 10.7 K colder than the paper states, and the difference is not explained.
-- **Simplified units.** The column pressure is one lumped state, the machines are ideal gases, and the trays have no vapour holdup.
+- **Simplified units.** The column pressure is one lumped state, the machines are ideal gases, and the trays have no vapor holdup.
 - **Cost.** One right-hand side costs 20 ms (conventional) to 40 ms (crr on `hysys`). A 180 min closed-loop run after a disturbance takes 11 to 13 min, so a dataset over this case is costly.
 - **Instruments.** Measurements and valves are ideal unless instruments or actuators are configured, apart from the three flow transmitters, which belong to the plant.

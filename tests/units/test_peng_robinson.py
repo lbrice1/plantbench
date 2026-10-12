@@ -41,7 +41,7 @@ def phases(comps):
     consts, props = c._thermo
     kw = dict(Tcs=list(c.Tc), Pcs=list(c.Pc), omegas=list(c.omega), kijs=c.kij.tolist())
     return {"liquid": CEOSLiquid(PRMIX, kw, HeatCapacityGases=props.HeatCapacityGases),
-            "vapour": CEOSGas(PRMIX, kw, HeatCapacityGases=props.HeatCapacityGases)}
+            "vapor": CEOSGas(PRMIX, kw, HeatCapacityGases=props.HeatCapacityGases)}
 
 
 def _x(name):
@@ -49,7 +49,7 @@ def _x(name):
     return x / x.sum()
 
 
-@pytest.mark.parametrize("phase", ["liquid", "vapour"])
+@pytest.mark.parametrize("phase", ["liquid", "vapor"])
 @pytest.mark.parametrize("name", list(COMPOSITIONS))
 def test_fugacity_and_enthalpy_agree_with_thermo_at_every_state(pr, phases, name, phase):
     x = _x(name)
@@ -92,4 +92,4 @@ def test_the_enthalpy_table_is_exact_to_a_millijoule(comps):
 
 def test_a_temperature_outside_the_table_is_refused(pr):
     with pytest.raises(ValueError, match="outside the enthalpy table"):
-        pr.h(np.array([30.0]), np.array([1e5]), np.array([_x("feed")]), "vapour")
+        pr.h(np.array([30.0]), np.array([1e5]), np.array([_x("feed")]), "vapor")

@@ -9,9 +9,9 @@ end, the column and the recompression:
                   -> E-100 (cold side) -> booster (TE-100 shaft) -> K-101 -> sales gas
               reboiler E-103 -> NGL bottoms
 
-    conventional   TK-100 vapour -> E-102 (hot side) -> TK-101 -> vapour -> TE-100 -> stage 1
+    conventional   TK-100 vapor -> E-102 (hot side) -> TK-101 -> vapor -> TE-100 -> stage 1
                    TK-101 liquid -> JTV-101 -> stage 8
-    gsp            TK-100 vapour split: R / (1 + R) -> TE-100 -> stage 8; the rest, with a
+    gsp            TK-100 vapor split: R / (1 + R) -> TE-100 -> stage 8; the rest, with a
                    part of the TK-100 liquid draw, is the branch:
                    branch -> E-102 (hot side) -> JTV-101 -> stage 1
     crr            as gsp, the branch through E-104 (cold side) to stage 2; a part of the
@@ -21,11 +21,11 @@ Stage numbers are those marked on the figures; the assignment of streams to them
 branch's liquid and the crr recycle follow the HYSYS case "Demethanizer - Tuned"
 (README.md, Provenance).  In the code, stages are 0-based.
 
-Under crr, stage 1 receives vapour only, the recycle and the vapour of stage 2, and in
+Under crr, stage 1 receives vapor only, the recycle and the vapor of stage 2, and in
 HYSYS passes no liquid.  An equilibrium tray there holds a liquid that nothing renews,
 whose heavy components accumulate on a time scale of a day, so the steady state is not
 determined by the tray.  Stage 1 is therefore an adiabatic mixing point without holdup:
-the column's trays are stages 2 to 30, and the overhead is the vapour of stage 2 mixed
+the column's trays are stages 2 to 30, and the overhead is the vapor of stage 2 mixed
 with the recycle, any condensate travelling with it.
 
 Units and their states:
@@ -38,7 +38,7 @@ Units and their states:
     a hot side is in the balance.
   * E-101, a duty removed from the stream; no state.
   * TK-100 and TK-101, flash drums: the inlet is flashed at the drum temperature and
-    pressure, its vapour leaves at once and its liquid joins the holdup, which leaves by
+    pressure, its vapor leaves at once and its liquid joins the holdup, which leaves by
     the level valve.  States: temperature, which relaxes to the adiabatic flash
     temperature of the inlet with the drum's heat capacity, liquid holdup and liquid
     composition.
@@ -46,8 +46,8 @@ Units and their states:
     feeds; its shaft work drives the booster.  K-102 likewise, an ideal gas, raising the
     recycle by `dP_K102`.
   * T-100, `plantbench.units.staged_column` with the reboiler.
-  * The column top and overhead circuit, one lumped vapour inventory whose pressure is the
-    top pressure.  It fills with the overhead vapour and empties through K-102 and through
+  * The column top and overhead circuit, one lumped vapor inventory whose pressure is the
+    top pressure.  It fills with the overhead vapor and empties through K-102 and through
     the booster and K-101, whose flows at given powers follow from their pressure ratios,
     the residue gas taken as an ideal gas with each machine's heat capacity.
   * Flow transmitters on the NGL and, under crr, on the recycle and the residue gas,
@@ -120,7 +120,7 @@ class Inputs:
     v_LCV100: float  # 0-1, TK-100 liquid
     v_LCV101: float  # 0-1, TK-101 liquid, conventional
     v_LCV102: float  # 0-1, NGL bottoms
-    split: float  # R, TE-100 flow over the branch's vapour, gsp and crr
+    split: float  # R, TE-100 flow over the branch's vapor, gsp and crr
     W_K102: float  # kW, K-102, crr
     liquid_split: float = 0.0  # 0-1, the part of the TK-100 liquid draw to the branch
 
@@ -147,7 +147,7 @@ class Streams:
     read by the measurements, and in hold mode the inputs that hold the specifications."""
 
     tk100: object  # the TK-100 inlet flashed at the drum
-    V1: float  # TK-100 vapour, kmol/min
+    V1: float  # TK-100 vapor, kmol/min
     L100: float  # TK-100 liquid draw
     F_expander: float
     y_expander: np.ndarray
@@ -157,14 +157,14 @@ class Streams:
     W_expander: float  # kJ/min
     column: object  # staged_column.Profile
     B: float  # NGL, kmol/min
-    V0: float  # overhead vapour, under crr the recycle included
+    V0: float  # overhead vapor, under crr the recycle included
     F_comp: float  # residue gas through the booster and K-101
     P_booster_out: float  # kPa
     T_booster_out: float  # K, ideal gas
     T_K101_out: float  # K, ideal gas
     tk101: object = None  # conventional
     L101: float = 0.0
-    F_branch: float = 0.0  # gsp, crr: vapour and liquid
+    F_branch: float = 0.0  # gsp, crr: vapor and liquid
     F_recycle: float = 0.0  # crr
     # Enthalpies at the plant's boundary, for its energy balance, kJ/kmol and kJ/min.
     h_feed: float = 0.0
@@ -245,10 +245,10 @@ class Plant:
         self._keep(key, f.K)
         return f
 
-    def _vapour(self, T, P, y):
-        """Enthalpy and entropy of a vapour stream at T K and P kPa."""
+    def _vapor(self, T, P, y):
+        """Enthalpy and entropy of a vapor stream at T K and P kPa."""
         T, P = np.array([T]), np.array([P * KPA])
-        return self.eos.h(T, P, y[None], "vapour")[0], self.eos.s(T, P, y[None], "vapour")[0]
+        return self.eos.h(T, P, y[None], "vapor")[0], self.eos.s(T, P, y[None], "vapor")[0]
 
     def _liquid_h(self, T, P, x):
         return self.eos.h(np.array([T]), np.array([P * KPA]), x[None], "liquid")[0]
@@ -276,7 +276,7 @@ class Plant:
         L100 = implied["v_LCV100"] * pp.F_LCV100_max if hold \
             else u.v_LCV100 * pp.F_LCV100_max
         h_chiller_out = h_E100h[-1] - Q_chiller * KW / F
-        h_V1, _ = self._vapour(s["T_TK100"], pp.P_TK100, y1)
+        h_V1, _ = self._vapor(s["T_TK100"], pp.P_TK100, y1)
 
         h_L100 = self._liquid_h(s["T_TK100"], pp.P_TK100, s["x_TK100"])
         P_col = self.column.pressures(s["P_top"] * KPA) / KPA
@@ -296,7 +296,7 @@ class Plant:
             L101 = (implied["v_LCV101"] if hold else u.v_LCV101) * pp.F_LCV101_max
             L_to26 = L100
         else:
-            # The branch: the vapour not expanded and a part of the liquid draw, mixed
+            # The branch: the vapor not expanded and a part of the liquid draw, mixed
             # adiabatically after their valves.
             F_bv, F_bl = V1 / (1 + u.split), u.liquid_split * L100
             F_E102h = F_bv + F_bl
@@ -311,7 +311,7 @@ class Plant:
 
         # TE-100: expanded to the pressure of the stage it feeds.
         P_exp_out = P_col[stages["expander"]]
-        h_in, s_in = self._vapour(T_exp, P_exp, y_exp)
+        h_in, s_in = self._vapor(T_exp, P_exp, y_exp)
         iso = eos.flash_PS(np.array([P_exp_out * KPA]), np.array([s_in]), y_exp[None],
                            T0=self._warm.get("iso_T", np.array([T_exp - 55.0])),
                            K0=self._warm.get("iso_K"))
@@ -320,7 +320,7 @@ class Plant:
         h_exp_out = h_in - pp.eta_machines * (h_in - iso.h[0])
         W_expander = F_exp * (h_in - h_exp_out)
 
-        # T-100: the equilibrium first, since the crr recycle is overhead vapour.
+        # T-100: the equilibrium first, since the crr recycle is overhead vapor.
         eq = equilibrium(self.column, eos, s["x"], s["x_B"], s["P_top"] * KPA,
                          T0=self._warm.get("column_T"))
         self._keep("column_T", eq[1])
@@ -353,9 +353,9 @@ class Plant:
             implied["v_LCV102"] = B / pp.F_LCV102_max
             dM_B = 0.0  # the reboiler composition does not depend on the draw
 
-        # crr: stage 1 mixes the vapour of stage 2 with the recycle leaving E-104; K-102
+        # crr: stage 1 mixes the vapor of stage 2 with the recycle leaving E-104; K-102
         # draws the recycle from the mixture.  The recycle has the overhead's composition,
-        # which is therefore that of the stage-2 vapour.  K-102 is an ideal gas from the
+        # which is therefore that of the stage-2 vapor.  K-102 is an ideal gas from the
         # stage-2 temperature, the mixing point's being within a kelvin of it.
         F_rec, H_K102, h_ov = 0.0, 0.0, h_top
         derivs = {}

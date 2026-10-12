@@ -69,7 +69,7 @@ def test_the_reflux_and_the_reboiler_duty(y, ref):
 
 
 def test_the_condenser_duty_against_hysys_streams(y):
-    """The duty the HYSYS streams imply, the vapour to the condenser less the reflux and
+    """The duty the HYSYS streams imply, the vapor to the condenser less the reflux and
     distillate, is matched within 2 % (0.7 %)."""
     S = H.load()["streams"]
     q = (S["To Condenser @COL2"]["F_kmol_h"] * S["To Condenser @COL2"]["h_kJ_kmol"]
@@ -84,12 +84,12 @@ def test_recorded_misses(design, y, ref):
     the duty its own streams imply; the dynamic case's reported duty is not at the
     steady state of its streams.
 
-    The E-100 outlet is 0.8 % vapour against HYSYS's 2.3 %, and its enthalpy rise 5 %
-    smaller: the feed sits near its bubble point at 33 C, where the vapour fraction is
+    The E-100 outlet is 0.8 % vapor against HYSYS's 2.3 %, and its enthalpy rise 5 %
+    smaller: the feed sits near its bubble point at 33 C, where the vapor fraction is
     sensitive to the small differences of the two Peng-Robinson implementations."""
     assert y["condenser duty"] > 1.08 * ref["duty_kJ_h"]["condenser"] / 3600
     st = design.plant.streams(design.x, design.u)
-    assert st.vapour_heated < 0.015 < H.stream("2")["VF"]
+    assert st.vapor_heated < 0.015 < H.stream("2")["VF"]
     assert y["E-100 duty"] < 0.97 * ref["duty_kJ_h"]["E-100"] / 3600
 
 

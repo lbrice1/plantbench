@@ -1,5 +1,5 @@
 THE CRR DESIGN ON THE HYSYS BASIS AGAINST THE HYSYS CASE
-analyzed at 8728792 dirty with plantbench 0.2.1, Python 3.14.7, NumPy 2.5.3, SciPy 1.18.1, scikit-learn 1.9.1, pacmap 0.9.1, hdbscan 0.8.44
+analyzed at 144ac19 dirty with plantbench 0.2.1, Python 3.14.7, NumPy 2.5.3, SciPy 1.18.1, scikit-learn 1.9.1, pacmap 0.9.1, hdbscan 0.8.44
 
 quantity                                       HYSYS       model  difference  unit
 E-100 hot outlet (4)                           -2.99     -3.0168     -0.0268  C
@@ -8,9 +8,9 @@ residue gas leaving E-100 (5)                 -10.21     -8.0671        2.14  C
 E-102 hot outlet (20)                         -64.43     -63.984       0.446  C
 E-104 hot outlet (24)                         -107.5     -107.16       0.345  C
 branch to stage 2 (22)                        -110.4     -110.49     -0.0926  C
-branch to stage 2, vapour fraction            0.7157      0.7131     -0.0026  -
+branch to stage 2, vapor fraction             0.7157      0.7131     -0.0026  -
 TE-100 outlet (17)                            -98.07     -97.953       0.117  C
-TE-100 outlet, vapour fraction                0.8939     0.89255    -0.00135  -
+TE-100 outlet, vapor fraction                 0.8939     0.89255    -0.00135  -
 booster discharge (6)                           1109      1096.1       -12.9  kPa
 booster discharge (6)                          17.24      18.672        1.43  C
 K-101 discharge (Sales Gas)                    188.9      189.56        0.66  C

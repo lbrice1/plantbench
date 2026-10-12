@@ -99,7 +99,7 @@ def measurements(design: Design) -> dict:
         "reboiler level": level("M_B", 2 * pp.M_reboiler_design),
         "overhead pressure": state("P_top"),  # kPa
         "methane in NGL": lambda x, u, pp: float(100.0 * x[i["x_B"]][C1]),  # mol %
-        # ERIC-100: the NGL flow transmitter and the analysers on the feed and the NGL
+        # ERIC-100: the NGL flow transmitter and the analyzers on the feed and the NGL
         "ethane recovery": lambda x, u, pp: float(
             x[i["FT_NGL"].start] * x[i["x_B"]][C2] / (u.F_feed * u.z_feed[C2])),
         "NGL flow": state_kmol_h("FT_NGL"),
@@ -175,7 +175,7 @@ TUNING = {
 # ERIC-100, the recovery cascade's primary: on the TK-100 temperature set-point, K per
 # unit recovery, or on the expander-to-branch ratio R, per unit recovery.
 RECOVERY_ON_TEMPERATURE = dict(Kc=-5.0, tau_I=3.0, lo=-60.0, hi=-20.0)
-# A larger R sends less of the TK-100 vapour to the branch and raises the recovery: at a
+# A larger R sends less of the TK-100 vapor to the branch and raises the recovery: at a
 # fixed TK-100 temperature, 0.0064 for R 5 % above its design value, gsp and crr alike.
 RECOVERY_ON_RATIO = dict(Kc=1.0, tau_I=3.0, lo=0.5, hi=4.0)
 

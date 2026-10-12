@@ -53,9 +53,9 @@ class NGLParameters:
 
     # -- separators ------------------------------------------------------------------------
     # [C] section 2: the liquid of TK-100 is let down from 4672 kPa and that of TK-101
-    # from 5199 kPa.  TK-101 is fed by the vapour of TK-100, so the pressure rises along
+    # from 5199 kPa.  TK-101 is fed by the vapor of TK-100, so the pressure rises along
     # the flow; taken as published, the expander outlet is reproduced to 0.1 K, and
-    # exchanged it is not (README.md, Provenance).  Without vapour holdup a
+    # exchanged it is not (README.md, Provenance).  Without vapor holdup a
     # separator's pressure enters only its flash.
     P_TK100: float = 4672.0  # kPa
     P_TK101: float = 5199.0  # kPa
@@ -77,7 +77,7 @@ class NGLParameters:
     # transferred grows with the number of cells towards that of true counter-current
     # flow; at the published UA, 10 cells put the E-100 hot outlet at -4.95 C (published
     # -4.8) and the booster discharge at 1265 kPa (published 1265), where 5 cells give
-    # -3.9 C and 1280 kPa and 20 give -5.5 C and 1258 kPa.  HYSYS's own discretisation is
+    # -3.9 C and 1280 kPa and 20 give -5.5 C and 1258 kPa.  HYSYS's own discretization is
     # not stated.
     n_cells: int = 10
     # [choice] heat capacity of the metal and holdup of one side of one cell: about 5 t of
@@ -91,7 +91,7 @@ class NGLParameters:
     # 1015 kPa to stage 8 (1014.5 on this drop).
     dP_stage: float = 0.64  # kPa
     # The stage and reboiler pressures above the top, kPa, when not uniform; overrides
-    # dP_stage.  [H] for the hysys basis, where the drop follows the vapour load.
+    # dP_stage.  [H] for the hysys basis, where the drop follows the vapor load.
     P_offsets: tuple | None = None
     weir_coeff: float = _WEIR_COEFF  # kmol/min per kmol**1.5
     holdup_weir: float = _HOLDUP_WEIR  # kmol
@@ -105,8 +105,8 @@ class NGLParameters:
     P_sales: float = 6081.0  # kPa [C]
     eta_machines: float = 0.75  # [C] section 3.1, TE-100, the booster, K-102
     eta_K101: float = 0.75  # [C] section 3.1; [H] 0.74
-    # [choice] the vapour volume of the column top and the overhead circuit, which sets how
-    # fast the column pressure moves when the vapour made and the vapour compressed differ.
+    # [choice] the vapor volume of the column top and the overhead circuit, which sets how
+    # fast the column pressure moves when the vapor made and the vapor compressed differ.
     V_overhead: float = 60.0  # m3
     T_overhead: float = 200.0  # K, the temperature at which that volume's inventory is taken
     # [D] the residue gas as an ideal gas in the machines' flow relations: its ideal-gas
@@ -138,9 +138,9 @@ class NGLParameters:
     tau_FT: float = 0.1  # min
 
     # -- gsp and crr [H]; Chebeir et al. (2019) give no stream values for these ---------------
-    # The TK-100 vapour expanded in TE-100 over that sent to the branch, R (2849 / 1755
+    # The TK-100 vapor expanded in TE-100 over that sent to the branch, R (2849 / 1755
     # kmol/h), and the part of the TK-100 liquid draw mixed into the branch (211 / 376).
-    # The branch is the vapour and that liquid, mixed at P_branch, through E-102's hot
+    # The branch is the vapor and that liquid, mixed at P_branch, through E-102's hot
     # side and JTV-101 to stage 1 (gsp) or through E-104's cold side to stage 2 (crr).
     R_split_design: float = 2849.05 / 1754.66
     liquid_split_design: float = 211.19 / 376.40
@@ -177,7 +177,7 @@ class NGLParameters:
 
 
 # [H] the HYSYS column: stage pressures 1010 kPa at the top to 1104 in the reboiler, the
-# drop concentrated above stage 8 where the vapour load is eight times that below.
+# drop concentrated above stage 8 where the vapor load is eight times that below.
 _P_HYSYS = (1010, 1031, 1041, 1051, 1061, 1071, 1080, 1090, 1090, 1091, 1092, 1092, 1093,
             1093, 1094, 1095, 1095, 1096, 1097, 1097, 1098, 1099, 1099, 1100, 1100, 1101,
             1102, 1102, 1103, 1104, 1104)

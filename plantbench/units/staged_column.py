@@ -5,19 +5,19 @@ balance and a reboiler, for thermodynamics supplied from outside.
 molar overflow, one feed and a total condenser.  This model drops each assumption: the
 equilibrium and the enthalpies come from a `Thermo` object (an equation of state, or the
 constant-volatility model of `IdealThermo`, which reduces it to the other column), the
-vapour flows from a stage energy balance, and liquid, vapour or two-phase feeds enter any
+vapor flows from a stage energy balance, and liquid, vapor or two-phase feeds enter any
 stage.  It has no condenser; the liquid on the top stage comes from the feeds: the reflux
 of a condenser the caller models, or a cold feed, as in a demethanizer whose top feed is
 the expander outlet.
 
 Assumptions:
 
-  * ideal stages, the vapour leaving a stage in equilibrium with its liquid, at the stage
+  * ideal stages, the vapor leaving a stage in equilibrium with its liquid, at the stage
     temperature, which is the bubble point of the liquid at the stage pressure
-  * no vapour holdup; the pressure of stage n is the top pressure plus n pressure drops
+  * no vapor holdup; the pressure of stage n is the top pressure plus n pressure drops
   * Francis weir hydraulics, the form of `units.column.weir_flow`
   * the energy balance of a stage is quasi-steady in its specific enthalpy: d(M h)/dt is
-    taken as h dM/dt, so that the vapour leaving each stage follows explicitly from the
+    taken as h dM/dt, so that the vapor leaving each stage follows explicitly from the
     stage below; the reboiler likewise, its duty an input
 
 States, holdups in kmol and compositions as mole fractions, stage 0 at the top:
@@ -86,7 +86,7 @@ class Profile:
     h_L: np.ndarray
     h_V: np.ndarray
     L: np.ndarray  # liquid leaving each stage, kmol/min
-    V: np.ndarray  # vapour leaving each stage and the reboiler, kmol/min
+    V: np.ndarray  # vapor leaving each stage and the reboiler, kmol/min
 
 
 def weir_constants(L_weir: float, A_tray: float, h_weir: float,
@@ -101,9 +101,9 @@ def weir_constants(L_weir: float, A_tray: float, h_weir: float,
 
 
 def equilibrium(spec: ColumnSpec, thermo: Thermo, x, x_B, P_top: float, T0=None):
-    """Stage and reboiler pressures, temperatures and vapour compositions: the part of
+    """Stage and reboiler pressures, temperatures and vapor compositions: the part of
     `evaluate` that depends on the state alone, for a caller that needs the overhead
-    vapour before it can compute the feeds."""
+    vapor before it can compute the feeds."""
     P = spec.pressures(P_top)
     T, y = thermo.bubble_T(P, np.vstack([x, x_B[None]]), T0=T0)
     return P, T, y
@@ -126,7 +126,7 @@ def evaluate(spec: ColumnSpec, thermo: Thermo, M, x, M_B, x_B, P_top: float,
     P, T, y = eq if eq is not None else equilibrium(spec, thermo, x, x_B, P_top, T0)
     x_all = np.vstack([x, x_B[None]])
     h_L = thermo.h(T, P, x_all, "liquid")
-    h_V = thermo.h(T, P, y, "vapour")
+    h_V = thermo.h(T, P, y, "vapor")
 
     L = weir_flow(M, spec)  # leaving stage n for stage n + 1, the last into the reboiler
     F = np.zeros(n)
@@ -137,7 +137,7 @@ def evaluate(spec: ColumnSpec, thermo: Thermo, M, x, M_B, x_B, P_top: float,
         Fz[f.stage] += f.F * np.asarray(f.z)
         Fh[f.stage] += f.F * f.h
 
-    # Vapour, from the reboiler up.  At each stage, with d(M h)/dt = h dM/dt,
+    # Vapor, from the reboiler up.  At each stage, with d(M h)/dt = h dM/dt,
     #   V_n (H_n - h_n) = V_{n+1} (H_{n+1} - h_n) + L_{n-1} (h_{n-1} - h_n) + sum F (h_F - h_n)
     V = np.empty(n + 1)
     V[n] = (Q_R + L[n - 1] * (h_L[n - 1] - h_L[n])) / (h_V[n] - h_L[n])
@@ -159,7 +159,7 @@ def evaluate(spec: ColumnSpec, thermo: Thermo, M, x, M_B, x_B, P_top: float,
 
 class IdealThermo:
     """Constant relative volatility and constant latent heat: saturated liquid at zero
-    enthalpy and saturated vapour at `latent`, independent of temperature.  Under it the
+    enthalpy and saturated vapor at `latent`, independent of temperature.  Under it the
     energy balance gives constant molar overflow, and the column reduces to the model of
     `units.column`.  The temperature returned is a placeholder."""
 

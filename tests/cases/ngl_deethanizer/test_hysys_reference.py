@@ -47,7 +47,7 @@ def test_every_controller_has_its_range_and_action():
 
 
 def test_the_column_flows_close_at_both_ends():
-    """Stage 1's vapour less the reflux is the distillate; stage 30's liquid less the
+    """Stage 1's vapor less the reflux is the distillate; stage 30's liquid less the
     boil-up is the bottoms (kmol/h)."""
     col = H.load()["column"]
     assert col["V_kmol_h"][0] - col["reflux_kmol_h"] == pytest.approx(

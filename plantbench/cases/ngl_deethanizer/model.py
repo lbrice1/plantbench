@@ -9,8 +9,8 @@ Units and their models:
   * The column, `plantbench.units.staged_column` with the reboiler: ideal stages, Francis
     weirs, the stage energy balance, the HYSYS stage pressures above the top.
   * The condenser: total, its drum a well-mixed liquid at its bubble point at the top
-    pressure.  The top pressure is that of one lumped vapour inventory, the column's and
-    the drum's vapour space, which fills with the vapour leaving stage 1 and empties as
+    pressure.  The top pressure is that of one lumped vapor inventory, the column's and
+    the drum's vapor space, which fills with the vapor leaving stage 1 and empties as
     the condenser duty condenses it to the drum liquid.
   * The reflux is an input, a flow: FIC-101, which sets it in the HYSYS case, has an
     integral time of half a second and is taken as ideal.  The products leave through
@@ -22,7 +22,7 @@ States, in kmol, mole fractions, K and kPa:
     M_D, x_D[n_c]                  condenser drum
     M[30], x[30, n_c]              stages, index 0 at the top
     M_B, x_B[n_c]                  reboiler
-    P_top                          stage 1, the vapour to the condenser
+    P_top                          stage 1, the vapor to the condenser
 
 `Plant.evaluate(..., hold=True)` is the model with four of the design specifications held
 exactly (the heater outlet, the top pressure and the two levels), the inputs that hold
@@ -85,7 +85,7 @@ class Streams:
     B: float  # LPG, kmol/min
     h_feed: float  # kJ/kmol, the feed entering E-100
     h_heated: float  # kJ/kmol, leaving E-100
-    vapour_heated: float  # the vapour fraction leaving E-100
+    vapor_heated: float  # the vapor fraction leaving E-100
     implied: dict = field(default_factory=dict)
 
 
@@ -189,7 +189,7 @@ class Plant:
             implied["v_VLV102"] = B / pp.F_VLV102_max
             dM_B = 0.0
 
-        # The condenser, from the vapour leaving stage 1 to the drum liquid.
+        # The condenser, from the vapor leaving stage 1 to the drum liquid.
         V_top, h_top, y_top = col.V[0], col.h_V[0], col.y[0]
         latent = h_top - h_D
         if hold:
@@ -210,7 +210,7 @@ class Plant:
         streams = Streams(column=col, T_drum=float(T_D[0]), h_drum=float(h_D),
                           F_condensed=float(F_cond), D=float(D), B=float(B),
                           h_feed=float(h_in), h_heated=float(h_out),
-                          vapour_heated=float(heated.V[0]), implied=implied)
+                          vapor_heated=float(heated.V[0]), implied=implied)
         return dx_state, streams
 
 

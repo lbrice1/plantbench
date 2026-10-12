@@ -6,7 +6,7 @@ Solves the design at the HYSYS set-points and compares it with the HYSYS steady 
 (`ngl_deethanizer/hysys_reference.json`): the products, the recoveries, the duties, the
 reflux and boil-up, the condenser and reboiler temperatures, the heater outlet, and the
 temperature and light-component profiles of the column.  The condenser duty HYSYS
-reports is set beside the duty its own stream enthalpies imply, the vapour to the
+reports is set beside the duty its own stream enthalpies imply, the vapor to the
 condenser less the reflux and distillate.  Writes `results/hysys_comparison.txt`, from
 which the tolerances of `tests/test_golden.py` are argued.
 """
@@ -34,7 +34,7 @@ def rows(d) -> list[tuple[str, float, float]]:
     y = {k: f(d.x, d.u, d.pp) for k, f in m.items()}
     st = d.plant.streams(d.x, d.u)
     s = d.plant.layout.unpack(d.x)
-    # HYSYS's condenser duty from its own streams: vapour in, reflux and distillate out.
+    # HYSYS's condenser duty from its own streams: vapor in, reflux and distillate out.
     q_streams = (S["To Condenser @COL2"]["F_kmol_h"] * S["To Condenser @COL2"]["h_kJ_kmol"]
                  - (S["Reflux @COL2"]["F_kmol_h"] + S["3"]["F_kmol_h"])
                  * S["3"]["h_kJ_kmol"]) / 3600
@@ -48,13 +48,13 @@ def rows(d) -> list[tuple[str, float, float]]:
         ("ethane recovery", ref["ethane_recovery"], y["ethane recovery"]),
         ("propane recovery", 141.1325 / 147.0064, y["propane recovery"]),
         ("reflux, kmol/h", col["reflux_kmol_h"], y["reflux flow"]),
-        ("vapour to condenser, kmol/h", col["V_kmol_h"][0], 60 * st.column.V[0]),
+        ("vapor to condenser, kmol/h", col["V_kmol_h"][0], 60 * st.column.V[0]),
         ("boil-up, kmol/h", col["boilup_kmol_h"], 60 * st.column.V[-1]),
         ("E-100 duty, kW", ref["duty_kJ_h"]["E-100"] / 3600, y["E-100 duty"]),
         ("condenser duty, kW", ref["duty_kJ_h"]["condenser"] / 3600, y["condenser duty"]),
         ("  condenser duty from HYSYS's streams, kW", q_streams, y["condenser duty"]),
         ("reboiler duty, kW", ref["duty_kJ_h"]["reboiler"] / 3600, y["reboiler duty"]),
-        ("E-100 outlet vapour fraction", S["2"]["VF"], st.vapour_heated),
+        ("E-100 outlet vapor fraction", S["2"]["VF"], st.vapor_heated),
         ("E-100 enthalpy rise, kJ/kmol", S["2"]["h_kJ_kmol"] - S["1"]["h_kJ_kmol"],
          st.h_heated - st.h_feed),
         ("drum temperature, C", S["3"]["T_C"], y["condenser temperature"]),

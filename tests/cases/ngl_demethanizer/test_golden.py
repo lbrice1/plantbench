@@ -5,7 +5,7 @@ Against the paper (Chebeir et al. 2019, Section 2): the conditions it states for
 conventional scheme, each with the tolerance argued in the case card.  The cold end is
 held to 1 K at TK-101 and 2 K at the TE-100 outlet, wider than the warm end because the
 mixture is near its critical region there and the equation of state matters most.  The
-TK-100 temperature and the TE-100 vapour fraction miss their tolerances and are asserted
+TK-100 temperature and the TE-100 vapor fraction miss their tolerances and are asserted
 as misses, so that closing either gap shows here.
 
 Against itself: the design point to 1e-6, so that a change moving the reference
@@ -69,7 +69,7 @@ def test_the_tk100_temperature_is_a_recorded_miss(ref):
     assert abs(ref["TK-100 temperature"] - (-29.3)) > 10.0
 
 
-def test_the_expander_vapour_fraction_is_a_recorded_miss(ref):
+def test_the_expander_vapor_fraction_is_a_recorded_miss(ref):
     """0.891 against 0.88 published, outside the proposed 0.01."""
     assert ref["TE100_V"] == pytest.approx(0.8915, abs=1e-4)
     assert abs(ref["TE100_V"] - 0.88) > 0.01

@@ -1,4 +1,4 @@
-"""Peng–Robinson equation of state, vectorised over stages, for use inside a right-hand side.
+"""Peng–Robinson equation of state, vectorized over stages, for use inside a right-hand side.
 
 The column of a light-hydrocarbon plant needs a bubble-point temperature and the phase
 enthalpies on every stage at every evaluation of its right-hand side.  A general flash
@@ -9,7 +9,7 @@ same calculation for all stages at once in NumPy.
     comps = Components.from_names(["nitrogen", "methane", "ethane", ...])
     pr = PengRobinson(comps)
     T, y = pr.bubble_T(P, x)                 # P (N,), x (N, n_c) -> T (N,), y (N, n_c)
-    h_L, h_V = pr.h(T, P, x, "liquid"), pr.h(T, P, y, "vapour")
+    h_L, h_V = pr.h(T, P, x, "liquid"), pr.h(T, P, y, "vapor")
 
 The model is the Peng–Robinson (1976) equation with the classical alpha function and van
 der Waals mixing with binary interaction parameters k_ij.  Pure-component constants come
@@ -141,7 +141,7 @@ class Components:
 
 
 class PengRobinson:
-    """The Peng–Robinson equation on a component set, every method vectorised over a
+    """The Peng–Robinson equation on a component set, every method vectorized over a
     leading axis of states (stages): T and P of shape (N,), compositions (N, n_c)."""
 
     def __init__(self, comps: Components):
@@ -179,7 +179,7 @@ class PengRobinson:
     @staticmethod
     def _Z(A, B, phase: str):
         """The compressibility root of the phase: the smallest real root above B for a
-        liquid, the largest for a vapour.  Where one real root exists it serves both."""
+        liquid, the largest for a vapor.  Where one real root exists it serves both."""
         c2 = -(1.0 - B)
         c1 = A - 3.0 * B**2 - 2.0 * B
         c0 = -(A * B - B**2 - B**3)
@@ -248,8 +248,8 @@ class PengRobinson:
         return self.s_ideal(T, P, x) + self.s_departure(T, P, x, phase)
 
     def K(self, T, P, x, y):
-        """Equilibrium ratios for liquid x and vapour y, (N, n_c)."""
-        return np.exp(self.ln_phi(T, P, x, "liquid") - self.ln_phi(T, P, y, "vapour"))
+        """Equilibrium ratios for liquid x and vapor y, (N, n_c)."""
+        return np.exp(self.ln_phi(T, P, x, "liquid") - self.ln_phi(T, P, y, "vapor"))
 
     def wilson_K(self, T, P):
         return (self.c.Pc / P[:, None]) * np.exp(
@@ -259,9 +259,9 @@ class PengRobinson:
     # -- bubble point ----------------------------------------------------------------
 
     def bubble_T(self, P, x, T0=None, tol: float = 1e-12, max_iter: int = 60):
-        """Bubble-point temperature and incipient vapour of liquid x at pressure P.
+        """Bubble-point temperature and incipient vapor of liquid x at pressure P.
 
-        Newton on ln(sum K x) = 0 in T, with the vapour composition updated by successive
+        Newton on ln(sum K x) = 0 in T, with the vapor composition updated by successive
         substitution at each step, from a Wilson estimate or from `T0`.  Converges to
         `tol` in ln(sum K x) and in the relative step of T, so that the result is smooth
         enough to difference.
@@ -310,14 +310,14 @@ class PengRobinson:
         """Two-phase flash at temperature and pressure, every row at once.
 
         Successive substitution on the K-values, with the Rachford–Rice equation solved
-        without bounds on the vapour fraction (the negative flash of Whitson and
+        without bounds on the vapor fraction (the negative flash of Whitson and
         Michelsen, 1989), so that a row converging to a fraction outside (0, 1) is single
-        phase: liquid below 0, vapour above 1.  A single-phase row stops once its phase is
+        phase: liquid below 0, vapor above 1.  A single-phase row stops once its phase is
         settled, since its properties do not depend on K; a two-phase row is finished by
         Newton on ln K once substitution has brought it close.  Starts from Wilson's K or
         from `K0`.
 
-        Returns the `Flash` of each row: vapour fraction clipped to [0, 1], phase
+        Returns the `Flash` of each row: vapor fraction clipped to [0, 1], phase
         compositions, K-values and the molar enthalpy and entropy of the whole.
         """
         T = np.asarray(T, dtype=float)
@@ -354,7 +354,7 @@ class PengRobinson:
     def _substitute(self, T, P, z, lnK, beta):
         """One step of successive substitution: ln K from the phases ln K gives."""
         x, y = _phases(z, np.exp(lnK), beta)
-        return self.ln_phi(T, P, x, "liquid") - self.ln_phi(T, P, y, "vapour")
+        return self.ln_phi(T, P, x, "liquid") - self.ln_phi(T, P, y, "vapor")
 
     def _newton(self, T, P, z, lnK, beta, tol, max_iter: int = 8):
         """Newton on g(ln K) = ln K - substitute(ln K) = 0, its Jacobian by forward
@@ -380,22 +380,22 @@ class PengRobinson:
     def _result(self, T, P, z, K, beta) -> Flash:
         x, y = _phases(z, K, beta)
         # A row that is one phase, or that converged to the trivial solution K = 1, is
-        # all liquid or all vapour: labelled by the fraction the negative flash gives, and
+        # all liquid or all vapor: labeled by the fraction the negative flash gives, and
         # for the trivial solution by which root is the more stable.
         trivial = np.max(np.abs(np.log(K)), axis=1) < 1e-4
         liquid = (beta <= 0.0) | (trivial & self._liquid_like(T, P, z))
-        vapour = (beta >= 1.0) | (trivial & ~liquid)
-        V = np.where(liquid, 0.0, np.where(vapour, 1.0, beta))
+        vapor = (beta >= 1.0) | (trivial & ~liquid)
+        V = np.where(liquid, 0.0, np.where(vapor, 1.0, beta))
         x = np.where(liquid[:, None], z, x)
-        y = np.where(vapour[:, None], z, y)
-        h = (1 - V) * self.h(T, P, x, "liquid") + V * self.h(T, P, y, "vapour")
-        s = (1 - V) * self.s(T, P, x, "liquid") + V * self.s(T, P, y, "vapour")
+        y = np.where(vapor[:, None], z, y)
+        h = (1 - V) * self.h(T, P, x, "liquid") + V * self.h(T, P, y, "vapor")
+        s = (1 - V) * self.s(T, P, x, "liquid") + V * self.s(T, P, y, "vapor")
         return Flash(T=T, P=P, V=V, x=x, y=y, K=K, h=h, s=s)
 
     def _liquid_like(self, T, P, z):
         """Where one phase: whether the liquid root has the lower Gibbs energy."""
         gL = np.einsum("ni,ni->n", z, self.ln_phi(T, P, z, "liquid"))
-        gV = np.einsum("ni,ni->n", z, self.ln_phi(T, P, z, "vapour"))
+        gV = np.einsum("ni,ni->n", z, self.ln_phi(T, P, z, "vapor"))
         return gL < gV - 1e-12
 
     def _flash_P(self, P, z, target, value, T0, K0, tol, max_iter):
@@ -449,8 +449,8 @@ class PengRobinson:
 
 @dataclass(frozen=True, eq=False)
 class Flash:
-    """The result of a flash, one row per stream: T K, P Pa, vapour fraction V, liquid x
-    and vapour y (the feed composition in a phase that is absent), K, and the molar
+    """The result of a flash, one row per stream: T K, P Pa, vapor fraction V, liquid x
+    and vapor y (the feed composition in a phase that is absent), K, and the molar
     enthalpy h J/mol and entropy s J/(mol K) of the whole."""
 
     T: np.ndarray
@@ -471,9 +471,9 @@ def _phases(z, K, beta):
 
 
 def _rachford_rice(z, K, beta0, tol: float = 1e-14, max_iter: int = 100):
-    """The vapour fraction solving sum z (K - 1) / (1 + beta (K - 1)) = 0, by Newton kept
+    """The vapor fraction solving sum z (K - 1) / (1 + beta (K - 1)) = 0, by Newton kept
     inside the interval where every denominator is positive, which extends beyond [0, 1]
-    for the negative flash.  A row whose K are all above 1 has no root and is all vapour
+    for the negative flash.  A row whose K are all above 1 has no root and is all vapor
     (returned as 2); all below 1, all liquid (returned as -1)."""
     Km1 = K - 1.0
     Kmax, Kmin = K.max(axis=1), K.min(axis=1)
