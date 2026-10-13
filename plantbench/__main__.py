@@ -3,13 +3,15 @@
     plantbench list
     plantbench describe reactor_separator_recycle
     plantbench run jacketed_cstr [--config config.toml] [--t-end 600] [--dt 1] [--out run.npz]
-    plantbench generate spec.toml [--out DIR] [--workers N]
+    plantbench generate spec.toml [--out DIR] [--workers N] [--jacobian batched] [--device cuda]
+                                  [--ensemble M]
     plantbench datasets [DIR]
     plantbench compare A B [--tol T] [--no-trajectories]
     plantbench card data/regimes [--format text|md|latex|json]
     plantbench verify spec.toml pb-protocol:dab0d47475e9
     plantbench new-case my_tank [DIR]
     plantbench check my_tank [--contribute]
+    plantbench contribute my_tank [--description TEXT] [--studies DIR] [--dry-run | --revert]
 
 `python -m plantbench` is equivalent to `plantbench`.
 """
@@ -66,7 +68,8 @@ def _run(args) -> None:
     if args.config:
         with open(args.config, "rb") as f:
             config = case.validate(tomllib.load(f))
-    tr = pb.run(case, config, t_end=args.t_end, dt=args.dt)
+    tr = pb.run(case, config, t_end=args.t_end, dt=args.dt, jacobian=args.jacobian,
+                device=args.device)
     print(f"{case.id} {config.structure}: {tr.t.size} points over {tr.t[-1]:g} min, "
           f"{tr.wall_time:.2f} s, {tr.nfev} right-hand-side evaluations")
     for name, v in tr.y.items():
@@ -76,9 +79,22 @@ def _run(args) -> None:
         print(f"written to {args.out}")
 
 
+def _solver_arguments(p) -> None:
+    p.add_argument("--jacobian", choices=("internal", "batched"), default="internal",
+                   help="LSODA's own Jacobian (default), or one batched evaluation per "
+                        "Jacobian, for a case that supports it")
+    p.add_argument("--device", choices=("cpu", "cuda"), default="cpu",
+                   help="where a batched Jacobian is evaluated (default cpu); cuda needs "
+                        "plantbench[gpu]")
+
+
 def _generate(args) -> None:
     from plantbench.datagen import generate
-    out = generate(args.spec, out_dir=args.out, workers=args.workers)
+    if args.ensemble:
+        solver = {"ensemble": args.ensemble, "device": args.device}
+    else:
+        solver = {"jacobian": args.jacobian, "device": args.device}
+    out = generate(args.spec, out_dir=args.out, workers=args.workers, solver=solver)
     print(f"dataset in {out}")
 
 
@@ -155,7 +171,34 @@ def _new_case(args) -> None:
           f"  pip install -e {root}          # or uv pip install -e; plantbench then finds {args.case}\n"
           f"  pytest {root}                  # the contract, on the template's tank\n"
           f"  plantbench check {args.case}\n\n"
-          f"then replace the tank in {root / args.case}/model.py with your plant.")
+          f"then replace the tank in {root / args.case}/model.py with your plant, and once\n"
+          f"`plantbench check {args.case} --contribute` passes, `plantbench contribute "
+          f"{args.case}` adds it to a clone of the library.")
+
+
+def _contribute(args) -> int:
+    from plantbench import contribute
+    try:
+        if args.revert:
+            problems = contribute.revert(args.case)
+            print("\n".join(problems) if problems
+                  else f"the contribution of {args.case} is undone")
+            return 1 if problems else 0
+        plan = contribute.plan(args.case, description=args.description, studies=args.studies)
+    except contribute.ContributeError as exc:
+        print(f"cannot contribute: {exc}", file=sys.stderr)
+        return 2
+    print(f"{'would add' if args.dry_run else 'adding'} {args.case} to {plan.root}:\n")
+    print("\n".join(f"  {line}" for line in contribute.describe(plan)))
+    for note in plan.notes:
+        print(f"\nnote: {note}")
+    if args.dry_run:
+        return 0
+    record = contribute.apply(plan)
+    print(f"\nrecorded in {record.relative_to(plan.root)}; "
+          f"`plantbench contribute {args.case} --revert` undoes it.\n\nleft to you:")
+    print("\n".join(f"  - {item}" for item in plan.left))
+    return 0
 
 
 def _check(args) -> int:
@@ -202,11 +245,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--t-end", type=float, default=1500.0, help="minutes (default 1500)")
     p.add_argument("--dt", type=float, default=1.0, help="output spacing, minutes (default 1)")
     p.add_argument("--out", type=Path, help="write the trajectory to this .npz file")
+    _solver_arguments(p)
     p.set_defaults(func=_run)
     p = sub.add_parser("generate", help="generate a dataset from a specification")
     p.add_argument("spec", type=Path)
     p.add_argument("--out", type=Path, help="directory (default data/<study name>)")
     p.add_argument("--workers", type=int, default=1)
+    _solver_arguments(p)
+    p.add_argument("--ensemble", type=int, metavar="M",
+                   help="run the configurations as ensembles of up to M members in lockstep "
+                        "(Rodas5P), for a case with a batched right-hand side")
     p.set_defaults(func=_generate)
     p = sub.add_parser("datasets", help="the datasets on disk and what they are of")
     p.add_argument("dir", nargs="?", default="data", help="a dataset, or a directory of them")
@@ -236,6 +284,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--contribute", action="store_true",
                    help="also the rules for a case added to the library")
     p.set_defaults(func=_check)
+    p = sub.add_parser("contribute", help="add a case in its own package to this clone")
+    p.add_argument("case")
+    p.add_argument("--description", help="the case's row in the case tables (default: its summary)")
+    p.add_argument("--studies", type=Path, help="a directory of studies, to studies/<case>/")
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument("--dry-run", action="store_true", help="show the edits, write nothing")
+    mode.add_argument("--revert", action="store_true", help="undo a contribution from its record")
+    p.set_defaults(func=_contribute)
     args = parser.parse_args(argv)
     return args.func(args) or 0
 

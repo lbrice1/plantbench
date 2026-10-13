@@ -65,11 +65,11 @@ plantbench/task         what is predicted from a dataset and how an answer is sc
 plantbench/sensitivity  Sobol' indices over a design space
 ```
 
-Imports run one way. `core`, `units` and `heat` import nothing from each other or from any case, no case imports another, and no case imports the modules that generate, read or score datasets. Nothing in the library imports the studies. `tests/test_architecture.py` enforces this. `core` knows nothing about any plant, so a new case cannot require a change there that encodes its own assumptions. If a case does not fit the interface, the interface is changed so that it fits every case.
+Imports run one way. `core`, `units` and `heat` import nothing from each other or from any case, only `backend`, the array module beneath them (NumPy or CuPy), no case imports another, and no case imports the modules that generate, read or score datasets. Nothing in the library imports the studies. `tests/test_architecture.py` enforces this. `core` knows nothing about any plant, so a new case cannot require a change there that encodes its own assumptions. If a case does not fit the interface, the interface is changed so that it fits every case.
 
 ## Generalizing on the second use
 
-Code moves out of a case into a shared layer when a second case needs it, not before. Pinch analysis and the stream type were already independent of `reactor_separator_recycle` and live in `heat`. The heat-exchanger network model, the economics and the stream table remain in `reactor_separator_recycle`. Generalizing them from a single example would encode that example's assumptions: a network's `pressure`, for instance, is a column pressure, which a plant without a column does not have.
+Code moves out of a case into a shared layer when a second case needs it, not before. Pinch analysis and the stream type were already independent of `reactor_separator_recycle` and live in `heat`. The Peng–Robinson equation of state and the staged column with a stage energy balance were written for `ngl_demethanizer` and moved to `units` when `ngl_deethanizer` needed them. The heat-exchanger network model, the economics and the stream table remain in `reactor_separator_recycle`. Generalizing them from a single example would encode that example's assumptions: a network's `pressure`, for instance, is a column pressure, which a plant without a column does not have.
 
 ## Data
 

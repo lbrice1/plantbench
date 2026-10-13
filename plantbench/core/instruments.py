@@ -23,9 +23,11 @@ of first-order lags instead for cases where that matters more than phase accurac
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
+
+from plantbench.backend import clamp, namespace
 
 # Below this, a time constant or a deadtime is treated as absent rather than as a very
 # fast state, which would make the system needlessly stiff.
@@ -115,30 +117,33 @@ class Instrument:
         return np.asarray(s, dtype=float)
 
     def derivatives(self, states: np.ndarray, pv: float) -> np.ndarray:
-        """Time derivatives of the instrument states given the true process value."""
+        """Time derivatives of the instrument states given the true process value.
+
+        For a batch, `states` is (m, n_states) and `pv` (m,)."""
+        xp = namespace(states)
         if self.n_states == 0:
-            return np.zeros(0)
-        d = np.empty(self.n_states)
+            return xp.zeros(np.shape(pv) + (0,))
+        d = xp.empty(np.shape(pv) + (self.n_states,))
         i = 0
         v = pv
         if self.n_lag_states:
-            d[0] = (pv - states[0]) / self.tau
-            v = states[0]  # the deadtime sees the lagged signal
+            d[..., 0] = (pv - states[..., 0]) / self.tau
+            v = states[..., 0]  # the deadtime sees the lagged signal
             i = 1
         if self.n_delay_states:
-            z = states[i:]
+            z = states[..., i:]
             th = self.deadtime
             if self.method == "lags":
                 k = self.order / th
                 prev = v
                 for j in range(self.order):
-                    d[i + j] = (prev - z[j]) * k
-                    prev = z[j]
+                    d[..., i + j] = (prev - z[..., j]) * k
+                    prev = z[..., j]
             elif self.order == 1:
-                d[i] = -(2.0 / th) * z[0] + v
+                d[..., i] = -(2.0 / th) * z[..., 0] + v
             else:
-                d[i] = z[1]
-                d[i + 1] = -(12.0 / (th * th)) * z[0] - (6.0 / th) * z[1] + v
+                d[..., i] = z[..., 1]
+                d[..., i + 1] = -(12.0 / (th * th)) * z[..., 0] - (6.0 / th) * z[..., 1] + v
         return d
 
     def output(self, states: np.ndarray, pv: float) -> float:
@@ -148,18 +153,18 @@ class Instrument:
         i = 0
         v = pv
         if self.n_lag_states:
-            v = states[0]
+            v = states[..., 0]
             i = 1
         if self.n_delay_states:
-            z = states[i:]
+            z = states[..., i:]
             th = self.deadtime
             if self.method == "lags":
-                v = z[-1]
+                v = z[..., -1]
             elif self.order == 1:
-                v = -v + (4.0 / th) * z[0]
+                v = -v + (4.0 / th) * z[..., 0]
             else:
-                v = v - (12.0 / th) * z[1]
-        return float(v)
+                v = v - (12.0 / th) * z[..., 1]
+        return float(v) if np.ndim(v) == 0 else v
 
 
 @dataclass(frozen=True)
@@ -205,16 +210,109 @@ class Actuator:
         return np.zeros(0) if self.n_states == 0 else np.asarray([command], dtype=float)
 
     def derivatives(self, states: np.ndarray, command: float) -> np.ndarray:
+        xp = namespace(states)
         if self.n_states == 0:
-            return np.zeros(0)
-        rate = (command - states[0]) / self.tau
+            return xp.zeros(np.shape(command) + (0,))
+        rate = (command - states[..., 0]) / self.tau
         if np.isfinite(self.rate_limit):
-            rate = min(max(rate, -self.rate_limit), self.rate_limit)
-        return np.asarray([rate])
+            rate = clamp(rate, -self.rate_limit, self.rate_limit)
+        return xp.asarray(rate)[..., None]
 
     def output(self, states: np.ndarray, command: float) -> float:
-        return command if self.n_states == 0 else float(states[0])
+        if self.n_states == 0:
+            return command
+        return float(states[0]) if states.ndim == 1 else states[..., 0]
 
 
 IDEAL_INSTRUMENT = Instrument()
 IDEAL_ACTUATOR = Actuator()
+
+
+# ------------------------------------------------------------------------------------
+# Members of an ensemble, as one object
+# ------------------------------------------------------------------------------------
+#
+# In an ensemble (`control.stack`) each member may carry its own instrument and actuator
+# parameters, held as arrays of one value per member.  The members must have the same
+# number of states, so the counts are taken from the first and the arithmetic of the
+# parent classes runs on the arrays unchanged.
+
+
+@dataclass(frozen=True)
+class StackedInstrument(Instrument):
+    """Instruments of several members: `tau` and `deadtime` arrays, one value per member,
+    with the method, order and state counts they share."""
+
+    counts: tuple[int, int] = (0, 0)  # lag states, delay states
+
+    def __post_init__(self) -> None:  # the members were validated when constructed
+        pass
+
+    @property
+    def n_lag_states(self) -> int:
+        return self.counts[0]
+
+    @property
+    def n_delay_states(self) -> int:
+        return self.counts[1]
+
+    def take(self, rows) -> StackedInstrument:
+        return replace(self, tau=self.tau[rows], deadtime=self.deadtime[rows])
+
+
+@dataclass(frozen=True)
+class StackedActuator(Actuator):
+    """Actuators of several members: `tau` and `rate_limit` arrays, one value per member.
+    The rate is clipped for every member, which leaves it unchanged where the limit is
+    infinite."""
+
+    count: int = 0
+
+    def __post_init__(self) -> None:
+        pass
+
+    @property
+    def n_states(self) -> int:
+        return self.count
+
+    def derivatives(self, states, command):
+        xp = namespace(states)
+        if self.count == 0:
+            return xp.zeros(np.shape(command) + (0,))
+        rate = (command - states[..., 0]) / self.tau
+        return clamp(rate, -self.rate_limit, self.rate_limit)[..., None]
+
+    def take(self, rows) -> StackedActuator:
+        return replace(self, tau=self.tau[rows], rate_limit=self.rate_limit[rows])
+
+
+def stack_instruments(items: list[Instrument | None], xp=np) -> StackedInstrument | None:
+    """One instrument for the members `items`, or None when none has one.  Raises when
+    their numbers of states differ."""
+    if all(i is None for i in items):
+        return None
+    items = [i if i is not None else IDEAL_INSTRUMENT for i in items]
+    first = items[0]
+    shape = lambda i: (i.n_lag_states, i.n_delay_states, i.method, i.order)  # noqa: E731
+    if any(shape(i) != shape(first) for i in items):
+        raise ValueError("the members' instruments differ in their states: "
+                         f"{sorted({shape(i) for i in items})}")
+    return StackedInstrument(
+        tau=xp.asarray([i.tau for i in items], dtype=float),
+        deadtime=xp.asarray([i.deadtime for i in items], dtype=float),
+        method=first.method, order=first.order,
+        counts=(first.n_lag_states, first.n_delay_states))
+
+
+def stack_actuators(items: list[Actuator | None], xp=np) -> StackedActuator | None:
+    """One actuator for the members `items`, or None when none has one."""
+    if all(a is None for a in items):
+        return None
+    items = [a if a is not None else IDEAL_ACTUATOR for a in items]
+    counts = {a.n_states for a in items}
+    if len(counts) > 1:
+        raise ValueError("the members' actuators differ in their states: some are ideal")
+    return StackedActuator(
+        tau=xp.asarray([a.tau for a in items], dtype=float),
+        rate_limit=xp.asarray([a.rate_limit for a in items], dtype=float),
+        count=counts.pop())

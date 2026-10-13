@@ -189,8 +189,12 @@ def _named(kind: str, d: str | None) -> str:
     return f"{'specification' if kind == SPEC_ID else 'protocol'} {identifier(kind, d)}"
 
 
-def case_source_text(source: dict) -> str:
-    """Where a case that is not built in came from, as a line of a results file."""
+def case_source_text(source: dict | None) -> str:
+    """Where a case came from, as a line of a results file.  `None`, which
+    `datagen.case_source` gives for a built-in case, reads as built in; the library's
+    commit on the stamp's own line covers it."""
+    if source is None:
+        return "case built into plantbench"
     package = (f" of {source['distribution']} {source['version']}"
                if "distribution" in source else "")
     return (f"case from {source['module']}{package} ({source['kind']}), at "
@@ -305,8 +309,14 @@ def _trajectory_difference(a_dir: Path, b_dir: Path, run_id: str, tol: float) ->
     """How the two recordings of one run differ, or None when they agree."""
     with np.load(a_dir / "runs" / f"{run_id}.npz") as fa, \
             np.load(b_dir / "runs" / f"{run_id}.npz") as fb:
+        # A run written before the controller signals were recorded, or an open-loop run,
+        # has none; that is reported as such rather than as a numeric difference.
+        if ("c" in fa) != ("c" in fb):
+            return f"controller signals recorded only in {'A' if 'c' in fa else 'B'}"
         worst, where = 0.0, ""
-        for key in ("t", "x", "u", "y"):
+        for key in ("t", "x", "u", "y", "c"):
+            if key not in fa:
+                continue
             xa, xb = fa[key], fb[key]
             if xa.shape != xb.shape:
                 return f"{key} is {xa.shape} in A and {xb.shape} in B"
@@ -323,7 +333,7 @@ def _trajectory_difference(a_dir: Path, b_dir: Path, run_id: str, tol: float) ->
                 if largest > worst:
                     worst, where = largest, key
         meta_a, meta_b = json.loads(str(fa["meta"])), json.loads(str(fb["meta"]))
-    for key in ("case", "config", "state_names", "u_names", "y_names"):
+    for key in ("case", "config", "state_names", "u_names", "y_names", "c_names"):
         if meta_a.get(key) != meta_b.get(key):
             return f"{key} differs"
     return f"{where} moved by up to {worst:.3g}" if worst > tol else None

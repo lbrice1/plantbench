@@ -36,6 +36,7 @@ traj.x                  # states, (n_states, n_times)
 traj.state("T")         # one state by name
 traj.u["Fj"]            # every input, and derived signals such as `reactor_separator_recycle`'s recycle
 traj.y["T"]             # the case's named measurements
+traj.c["reactor T.SP"]  # each loop's set-point, measurement and output (Controller signals)
 traj.wall_time, traj.nfev
 traj.window(300.0, 600.0)
 traj.to_npz("run.npz")
@@ -54,7 +55,7 @@ A configuration has these sections; every one except the structure may be omitte
 | `params` | parameter overrides by dotted path | `{"reactor.U": 300.0}` |
 | `setpoints` | loop name to set-point | `{"reactor T": 365.0}` |
 | `setpoint_steps` | loop name to (time, change) pairs | `{"reactor T": [(30.0, 1.0)]}` |
-| `tuning` | loop name to Kc, tau_I, lo, hi | `{"reactor T": {"Kc": -0.5}}` |
+| `tuning` | loop name to Kc, tau_I, lo, hi, tau_D, alpha | `{"reactor T": {"Kc": -0.5}}` |
 | `instruments` | loop name to `Instrument` arguments | `{"reactor C_A": {"deadtime": 5.0}}` |
 | `actuators` | loop name to `Actuator` arguments | `{"reactor T": {"tau": 0.5}}` |
 | `disturbance` | a named disturbance and its arguments, or a list of them | `{"name": "throughput", "fraction": 0.1}` |
@@ -73,6 +74,18 @@ config = case.config("temperature PI",
 
 The same operations are available on a structure directly: `control.with_setpoints`, `with_setpoint_steps`, `with_tuning` and `with_instruments`.
 
+Every loop is PI unless it is given a derivative time. With `tau_D` above zero, in minutes, a loop is PID in the ideal (ISA standard) form, with `Kc` multiplying every term and the derivative acting on the measurement through a first-order filter of time constant `alpha * tau_D` (`alpha` 0.1 by default):
+
+$$
+\mathrm{OP} = \mathrm{bias} + K_c\left(e + \frac{1}{\tau_I}\int e\,dt - \tau_D \frac{dz}{dt}\right), \qquad \alpha\tau_D \frac{dz}{dt} = \mathrm{PV} - z .
+$$
+
+The derivative acts on the measurement rather than the error, so a set-point step moves the output by the proportional term alone. The filter state `z` is one more augmented state, which starts at the measurement, so a run starts at rest. No case tunes a loop with derivative action, and a loop without it adds no state, so every reference result is unchanged.
+
+```python
+config = case.config("temperature PI", tuning={"reactor T": {"tau_D": 2.0}})
+```
+
 ## Non-idealities
 
 An `Instrument` adds a first-order sensor lag (`tau`) and a deadtime (`deadtime`), represented by a Padé approximation of order 1 or 2 or by a chain of `order` lags (`method="lags"`). An `Actuator` adds a first-order valve travel (`tau`) and a slew limit (`rate_limit`). Noise, bias, quantization, stiction and deadband are declared and raise, for the reasons given in `plantbench/core/instruments.py`.
@@ -84,6 +97,21 @@ config = pb.load_case("reactor_separator_recycle").config(
 ```
 
 An unconfigured element adds no states, so a configuration without non-idealities reproduces the reference results exactly.
+
+## Controller signals
+
+A run records the signals of each loop in `traj.c`, under the loop's name:
+
+| Key | Signal |
+|---|---|
+| `<loop>.SP` | the set-point in force, after any set-point step and any primary's write |
+| `<loop>.PV` | the measurement the controller sees, after its instrument |
+| `<loop>.OP` | the output it commands, before its actuator; a primary's is its secondary's set-point |
+| `<loop>.PV%`, `<loop>.OP%` | the same in percent of span, where the loop declares one |
+
+A ratio station records `<station>.OP` only. The true measurement is in `traj.y`, and the input the plant receives, after the actuator, in `traj.u`. Where the HYSYS tags and these signals differ in name, the loop is named after its measurement: TIC-100 of the deethanizer is `stage 28 temperature`.
+
+The span of a measurement is the loop's `pv_range`, (PV_min, PV_max) in its units, and the span of an output is (`lo`, `hi`). The NGL cases take theirs from the HYSYS controllers, and the reactor cases declare spans of their own choosing, marked as such in their definitions. A span only scales the recorded signals: the measurement is not clamped to it. `control.percent_gain(loop)` gives the gain in percent of output span per percent of measurement span, the form HYSYS states a tuning in, negative for a direct-acting loop.
 
 ## Disturbances
 
@@ -109,6 +137,38 @@ ctl.damping_ratio(ev)                  # 0.013 for D4
 ```
 
 The Jacobian is taken by central differences on the closed-loop right-hand side, including the integral, instrument and actuator states. One structural zero per ratio station is removed.
+
+## The batched Jacobian and GPUs
+
+LSODA forms the Jacobian of the closed loop by forward differences, one evaluation of the right-hand side per state. On a plant with several hundred states and an equation of state inside its right-hand side, these evaluations are almost the whole cost of a run: on `ngl_deethanizer`, 97 % of them. A case whose right-hand side and measures accept a batch of states can instead have the whole Jacobian evaluated as one batch and handed to LSODA:
+
+```python
+traj = pb.run(case, config, t_end=60.0, jacobian="batched")                 # on the host
+traj = pb.run(case, config, t_end=60.0, jacobian="batched", device="cuda")  # on a GPU
+```
+
+and from the command line, `plantbench run ngl_deethanizer --jacobian batched` and `plantbench generate spec.toml --jacobian batched --device cuda`. The default, `jacobian="internal"`, is LSODA's own Jacobian, with which every published result was produced. The batched Jacobian agrees with it to the accuracy of the differences, so a trajectory agrees to the solver's tolerance but not to the last bit; a dataset records the option on each run made with it, under `solver`, and the specification's fingerprint does not include it. `setup.spectrum()` and `ctl.closed_loop_spectrum(..., jacobian="batched")` use the same batch for the linearization.
+
+On the host, a 20-minute run of `ngl_deethanizer` with a step in the feed's ethane takes 8 s with the batched Jacobian against 48 s with LSODA's own, and its states differ by at most 1e-10 relative; `benchmarks/jacobian.py` measures this for each case and device, and `benchmarks/scaling.py` the time of one batched evaluation against the size of the batch. `ngl_deethanizer` and `ngl_demethanizer` declare a batched right-hand side; `reactor_separator_recycle` and `jacketed_cstr` do not.
+
+On a node with one NVIDIA A100 (80 GB, PCIe), the same run takes 125 s with LSODA's own Jacobian, 26 s with the batched Jacobian on the host and 12 s with it on the GPU, whose states differ from the host's by at most 5e-11 relative. On a GPU, the cost of one evaluation is set by the number of array operations it issues, each a kernel launched from the host at a nearly fixed cost, rather than by the number of states. The state of a phase, its fugacities and the Rachford–Rice solve therefore run as one CUDA kernel each (`plantbench.units._kernels`), and one evaluation of either NGL case costs about the same from 16 to more than 1,000 states: 0.034 s for `ngl_deethanizer` and 0.27 to 0.30 s for `ngl_demethanizer`. A single run gains little from this, since between Jacobians LSODA advances the solution one state at a time; a single run belongs on a CPU node. The device pays when a batch holds many Jacobians: 64 of `ngl_deethanizer`, 23,104 states, take 0.071 s, 3.1 µs a state against 2.0 ms on the host, and 64 of `ngl_demethanizer` take 0.44 s.
+
+`device="cuda"` needs an NVIDIA GPU with fast double precision (A100, H100) and CuPy: `pip install 'plantbench[gpu]'` with a CUDA 12 toolkit on the machine, or the pixi environment `cuda` (linux-64), which takes CuPy and the CUDA runtime from conda-forge and needs only the driver. Everything is evaluated in double precision, since the integrations run at a relative tolerance of 1e-8.
+
+## Ensembles in lockstep
+
+Many configurations of one design can be integrated together, as one ensemble whose members advance in lockstep:
+
+```python
+results = pb.run_ensemble("ngl_deethanizer", configs, t_end=60.0, dt=1.0, device="cuda")
+traj = results[0].trajectory        # or results[0].error, for a member that failed
+```
+
+and from the command line, `plantbench generate spec.toml --ensemble 64 --device cuda`. Members share a design when they have the same structure, options and parameters, and they are run together when their control structures also have the same state layout; across members, the tunings, set-points, set-point steps, instrument and actuator parameters and disturbances may all differ. Each step evaluates the right-hand sides of every member still running as one batch, and the Jacobians of those that need one as another, so that on a GPU, where an evaluation costs about the same from one state to a few thousand, an ensemble of many members costs little more per step than one.
+
+The integrator is the Rosenbrock method Rodas5P (Steinebach, 2023), of order 5 with an embedded estimate of order 4, rather than LSODA: a Rosenbrock method does the same, fixed work every step, an exact Jacobian and eight solves with it, which is what lets members with different step sizes share every evaluation. Each member has its own time, step size and error control, and its steps end on its own breakpoints and on the output grid. A member that fails stops, and the others go on; `wall_budget` applies to the ensemble, and `generate` gives an ensemble the specification's budget, which is per run, times its number of members. The trajectories agree with LSODA's to the tolerance, not to the last bit: over a 20-minute run of `ngl_deethanizer`, to within half a tolerance (|Δx| ≤ 0.46 (atol + rtol |x|)), and against a run at a relative tolerance of 1e-11 the ensemble's states are the closer of the two. A dataset records `solver = {"ensemble": M, "device": ...}` on each run made this way, with `ensemble_size` and `ensemble_wall_time` beside the run's share of the wall time.
+
+On the host an ensemble gains nothing, since its evaluations cost in proportion to their size: a 20-minute run of `ngl_deethanizer` takes 25 s alone or as one of four, against 8 s with the batched Jacobian and LSODA, which remains the choice there. On the A100 node above, the same run takes 38 s as an ensemble of one, and 12 s, 3.1 s and 0.86 s a member in ensembles of 4, 16 and 64: 4,200 runs an hour, about 30 times the 140 an hour of LSODA with the batched Jacobian on one core of that node. The members' states agree with LSODA's to within 0.28 tolerances on either device. `benchmarks/ensemble.py` measures the throughput against the number of members on each device.
 
 ## Generating a dataset
 
@@ -157,7 +217,7 @@ A dotted path names a configuration section and then its keys: `"tuning.reactor 
 plantbench generate spec.toml --workers 8
 ```
 
-or `plantbench.datagen.generate("spec.toml", workers=8)`. A script that generates with more than one worker needs an `if __name__ == "__main__":` guard, because each worker process imports the script it was started from. The dataset is written to `data/<name>/` unless `--out` is given:
+or `plantbench.datagen.generate("spec.toml", workers=8)`. A script that generates with more than one worker needs an `if __name__ == "__main__":` guard, because each worker process imports the script it was started from. For a case with a batched right-hand side, `--ensemble M` runs the configurations in one process as ensembles of up to M members instead (Ensembles in lockstep); it cannot be combined with more than one worker. The dataset is written to `data/<name>/` unless `--out` is given:
 
 | File | Contents |
 |---|---|
