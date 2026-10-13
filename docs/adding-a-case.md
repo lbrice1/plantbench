@@ -48,7 +48,7 @@ A case is named for the process it models. The name is its id in `load_case`, th
 
 ## Rules
 
-- A case imports from `core`, `units` and `heat`, and from nothing else in the library. It does not import another case.
+- A case imports from `backend`, `core`, `units` and `heat`, and from nothing else in the library. It does not import another case.
 - `core` is not changed to accommodate one case. If the interface cannot express a case, the interface is changed so that it serves every case, with the contract tests and both golden tests passing.
 - Code is moved into a shared layer when a second case needs it ([design principles](philosophy.md#generalizing-on-the-second-use)).
 - A case built on published results carries a golden test of its reference configuration and is frozen from then on.
@@ -61,7 +61,7 @@ A case developed with `new-case` has the layout of a case in the library inside 
 plantbench check <case> --contribute
 ```
 
-must pass. It runs the contract and the rules above that can be checked mechanically: imports from `core`, `units` and `heat` only, no other case, and no third-party import that an extra does not declare; a case card with every section; tests of the case's own. It then lists the rules that need a reviewer's judgment, which the pull request should answer. Then, in a fork of the library ([CONTRIBUTING.md](https://github.com/lbrice1/plantbench/blob/main/CONTRIBUTING.md)), from an environment with the clone installed editable and the case's package installed:
+must pass. It runs the contract and the rules above that can be checked mechanically: imports from `backend`, `core`, `units` and `heat` only, no other case, and no third-party import that an extra does not declare; a case card with every section; tests of the case's own. It then lists the rules that need a reviewer's judgment, which the pull request should answer. Then, in a fork of the library ([CONTRIBUTING.md](https://github.com/lbrice1/plantbench/blob/main/CONTRIBUTING.md)), from an environment with the clone installed editable and the case's package installed:
 
 ```
 plantbench contribute <case> --dry-run       # the edits, written nowhere

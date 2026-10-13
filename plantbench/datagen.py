@@ -46,14 +46,14 @@ from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable, Iterator
 
 import numpy as np
 
 from plantbench import cases
 from plantbench.cases import load_case
 from plantbench.core import control as ctl
-from plantbench.core.case import Config, Trajectory, features_of
+from plantbench.core.case import Config, Trajectory, build_on, design_key, features_of, run_setups
 from plantbench.core.case import build as build_setup
 from plantbench.core.case import run as run_case
 from plantbench.core.spec import Spec, expand
@@ -64,34 +64,27 @@ except ImportError:  # Windows: generations are not guarded against one another 
     fcntl = None
 
 STATUSES = ("ok", "invalid", "failed", "timeout")
+# How each run is integrated, which is not part of the specification: the batched
+# Jacobian changes a trajectory only within the solver's tolerance, as another machine
+# would, and the device not at all beyond that.  See `control.integrate`.
+SOLVER_DEFAULTS = {"jacobian": "internal", "device": "cpu"}
 
 
-def run_one(case_id: str, config: dict, run: dict, runs_dir: str) -> dict:
-    """Run one configuration and return its record.  Never raises for a bad run."""
+def run_one(case_id: str, config: dict, run: dict, runs_dir: str,
+            solver: dict | None = None) -> dict:
+    """Run one configuration and return its record.  Never raises for a bad run.
+
+    `solver` holds `jacobian` and `device` for `control.integrate`; a record notes them
+    when they are not the defaults."""
+    solver = {**SOLVER_DEFAULTS, **(solver or {})}
     case = load_case(case_id)
-    record = {"run_id": None, "status": None, "message": "", "wall_time": np.nan,
-              "nfev": -1, "features": {}, "config": config}
-    record["run_id"] = run_id(case, config)
-    try:
-        cfg = case.validate(config)
-        record["config"] = cfg.to_dict()
-        setup = build_setup(case, cfg)
-    except (ValueError, KeyError, TypeError) as exc:
-        record.update(status="invalid", message=f"{type(exc).__name__}: {exc}")
+    record, setup = _setup(case, config, run, build_setup)
+    if setup is None:
         return record
-    except Exception as exc:  # noqa: BLE001 -- a design that does not solve is a result
-        record.update(status="failed", message=f"design: {type(exc).__name__}: {exc}")
-        return record
-    available = features_of(case)
-    for name in run["features"]:
-        try:
-            record["features"].update(available[name](setup))
-        except Exception as exc:  # noqa: BLE001 -- a feature that fails is a result
-            record["features"][f"{name}_error"] = f"{type(exc).__name__}: {exc}"
     start = time.perf_counter()
     try:
-        traj = run_case(case, cfg, t_end=float(run["t_end"]), dt=float(run["dt"]),
-                        wall_budget=run["wall_budget"])
+        traj = run_case(case, setup.config, t_end=float(run["t_end"]), dt=float(run["dt"]),
+                        wall_budget=run["wall_budget"], **solver)
     except ctl.WallTimeExceeded as exc:
         record.update(status="timeout", message=str(exc))
     except Exception as exc:  # noqa: BLE001 -- recorded, not hidden: a failure is a result
@@ -102,7 +95,86 @@ def run_one(case_id: str, config: dict, run: dict, runs_dir: str) -> dict:
         traj.to_npz(Path(runs_dir) / f"{record['run_id']}.npz")
         record.update(status="ok", nfev=traj.nfev)
     record["wall_time"] = time.perf_counter() - start
+    if solver != SOLVER_DEFAULTS:
+        record["solver"] = solver
     return record
+
+
+def _setup(case, config: dict, run: dict, build) -> tuple[dict, Any]:
+    """A new record of `config`, and its setup from `build(case, validated config)` with
+    the features recorded; or the record marked invalid or failed, and None."""
+    record = {"run_id": run_id(case, config), "status": None, "message": "",
+              "wall_time": np.nan, "nfev": -1, "features": {}, "config": config}
+    try:
+        cfg = case.validate(config)
+        record["config"] = cfg.to_dict()
+        setup = build(case, cfg)
+    except (ValueError, KeyError, TypeError) as exc:
+        record.update(status="invalid", message=f"{type(exc).__name__}: {exc}")
+        return record, None
+    except Exception as exc:  # noqa: BLE001 -- a design that does not solve is a result
+        record.update(status="failed", message=f"design: {type(exc).__name__}: {exc}")
+        return record, None
+    available = features_of(case)
+    for name in run["features"]:
+        try:
+            record["features"].update(available[name](setup))
+        except Exception as exc:  # noqa: BLE001 -- a feature that fails is a result
+            record["features"][f"{name}_error"] = f"{type(exc).__name__}: {exc}"
+    return record, setup
+
+
+def _run_ensembles(case_id: str, configs: list[dict], run: dict, runs_dir: str,
+                  solver: dict) -> Iterator[dict]:
+    """Run configurations as ensembles of at most `solver["ensemble"]` members and yield
+    their records, an ensemble's together as it finishes.  The records are those of
+    `run_one`, with `ensemble_size` and `ensemble_wall_time` beside `wall_time`, which is
+    the member's share of the ensemble's.  Configurations share a design when they have the
+    same `core.case.design_key`.  An ensemble's wall budget is the specification's, which
+    is per run, times its number of members."""
+    size = int(solver["ensemble"])
+    device = solver.get("device", "cpu")
+    case = load_case(case_id)
+    designs: dict[str, Any] = {}
+
+    def build(case, cfg):
+        key = design_key(cfg)
+        if key not in designs:
+            designs[key] = case.make_design(cfg)
+        return build_on(case, designs[key], cfg)
+
+    groups: dict[tuple, list] = {}
+    for config in configs:
+        record, setup = _setup(case, config, run, build)
+        if setup is None:
+            yield record
+            continue
+        key = (design_key(setup.config), ctl.layout_signature(setup.structure))
+        groups.setdefault(key, []).append((record, setup))
+    for members in groups.values():
+        for c in range(0, len(members), size):
+            chunk = members[c:c + size]
+            # A specification's budget is per run; an ensemble has its members' together.
+            budget = None if run["wall_budget"] is None else run["wall_budget"] * len(chunk)
+            results = run_setups([s for _, s in chunk], float(run["t_end"]),
+                                 dt=float(run["dt"]), wall_budget=budget, device=device)
+            for (record, _), res in zip(chunk, results):
+                record.update(ensemble_size=res.ensemble_size,
+                              ensemble_wall_time=res.ensemble_wall_time,
+                              wall_time=res.ensemble_wall_time / res.ensemble_size,
+                              solver={"ensemble": size, "device": device})
+                if isinstance(res.error, ctl.WallTimeExceeded):
+                    record.update(status="timeout", message=str(res.error))
+                elif res.error is not None:
+                    record.update(status="failed",
+                                  message=f"{type(res.error).__name__}: {res.error}")
+                else:
+                    traj = res.trajectory
+                    if not run.get("states", True):
+                        traj = replace(traj, x=traj.x[:0], state_names=[])
+                    traj.to_npz(Path(runs_dir) / f"{record['run_id']}.npz")
+                    record.update(status="ok", nfev=traj.nfev)
+                yield record
 
 
 # The checkout the package runs from, when it runs from one: the directory above it.
@@ -260,8 +332,9 @@ def _print(msg: str) -> None:
 
 
 def generate(spec: Spec | str | Path, out_dir: str | Path | None = None, workers: int = 1,
-             log: Callable[[str], None] = _print) -> Path:
-    """Run every configuration the specification describes that is not yet recorded."""
+             log: Callable[[str], None] = _print, solver: dict | None = None) -> Path:
+    """Run every configuration the specification describes that is not yet recorded.
+    `solver` is passed to `run_one`."""
     spec_path = None
     if not isinstance(spec, Spec):
         spec_path = Path(spec)
@@ -290,13 +363,13 @@ def generate(spec: Spec | str | Path, out_dir: str | Path | None = None, workers
             (out / "spec.json").write_text(json.dumps(spec.to_dict(), indent=2) + "\n")
 
     run_configurations(spec.case, expand(spec), out, spec.run, workers=workers, log=log,
-                       label=f"{spec.name}: ")
+                       label=f"{spec.name}: ", solver=solver)
     return out
 
 
 def run_configurations(case_id: str, configs, out_dir: str | Path, run: dict | None = None,
                        workers: int = 1, log: Callable[[str], None] = _print,
-                       label: str = "") -> list[dict]:
+                       label: str = "", solver: dict | None = None) -> list[dict]:
     """Run the given configurations into the dataset at `out_dir`, skipping any already
     recorded there, and return the records of those run now.
 
@@ -309,6 +382,8 @@ def run_configurations(case_id: str, configs, out_dir: str | Path, run: dict | N
     from plantbench.core.spec import RUN_DEFAULTS
 
     run = {**RUN_DEFAULTS, **(run or {})}
+    if solver and solver.get("ensemble") and workers > 1:
+        raise ValueError("an ensemble runs in one process; leave workers at 1")
     out = Path(out_dir)
     runs_dir = out / "runs"
     runs_dir.mkdir(parents=True, exist_ok=True)
@@ -349,8 +424,12 @@ def run_configurations(case_id: str, configs, out_dir: str | Path, run: dict | N
                 log(f"[{i}/{len(todo)}] {r['run_id']} {r['status']:7s} {r['wall_time']:7.2f} s"
                     + (f"  {r['message'][:80]}" if r["message"] else ""))
 
-            args = [(case_id, c, run, str(runs_dir)) for c in todo]
-            if workers <= 1:
+            args = [(case_id, c, run, str(runs_dir), solver) for c in todo]
+            if solver and solver.get("ensemble"):
+                for i, r in enumerate(_run_ensembles(case_id, todo, run, str(runs_dir),
+                                                    solver), 1):
+                    record(r, i)
+            elif workers <= 1:
                 for i, a in enumerate(args, 1):
                     record(run_one(*a), i)
             else:

@@ -278,3 +278,76 @@ def test_a_feature_is_recorded_even_when_the_run_is_too_short_to_say_anything(tm
     other = {**CASE0_SPEC, "run": {**CASE0_SPEC["run"], "t_end": 20.0}}
     out2 = datagen.generate(Spec.from_dict(other), tmp_path / "e", log=_quiet)
     assert datagen.load_records(out2)[0]["features"] == short
+
+
+# ------------------------------------------------------------------------------------
+# Ensembles
+# ------------------------------------------------------------------------------------
+
+TANKS_SPEC = {
+    "study": {"name": "e", "case": "tanks", "seed": 2},
+    "base": {"structure": "cascade", "disturbance": {"name": "step", "field": "d",
+                                                     "value": 0.1, "t": 2.0}},
+    "variants": [{}, {"options": {"x": 1.0}}],
+    "sample": {"n": 4, "tuning.level 1.Kc": [-0.6, -0.2]},
+    "run": {"t_end": 10.0, "dt": 1.0, "features": ["spectrum"]},
+}
+
+
+@pytest.fixture
+def tanks():
+    from _tanks import TANKS_CASE
+
+    from plantbench.cases import register
+    register(TANKS_CASE)
+
+
+def test_an_ensemble_generation_records_what_a_serial_one_does(tmp_path, tanks):
+    a = datagen.generate(Spec.from_dict(TANKS_SPEC), tmp_path / "a", log=_quiet)
+    b = datagen.generate(Spec.from_dict(TANKS_SPEC), tmp_path / "b", log=_quiet,
+                         solver={"ensemble": 3})
+    ra = {r["run_id"]: r for r in datagen.load_records(a)}
+    rb = {r["run_id"]: r for r in datagen.load_records(b)}
+    assert {k: r["status"] for k, r in ra.items()} == {k: r["status"] for k, r in rb.items()}
+    ok = [k for k, r in rb.items() if r["status"] == "ok"]
+    assert len(ok) == 4 and len(rb) == 8
+    assert sorted(rb[k]["ensemble_size"] for k in ok) == [1, 3, 3, 3]
+    for k in ok:
+        assert rb[k]["solver"] == {"ensemble": 3, "device": "cpu"}
+        assert rb[k]["features"] == ra[k]["features"]
+        xa, xb = datagen.load_run(a, k).x, datagen.load_run(b, k).x
+        assert np.max(np.abs(xb - xa) / (1.0 + np.abs(xa))) < 1e-6
+    messages = []
+    datagen.generate(Spec.from_dict(TANKS_SPEC), b, log=messages.append,
+                     solver={"ensemble": 3})
+    assert "0 to run" in messages[0]
+
+
+def test_an_ensemble_runs_in_one_process(tmp_path, tanks):
+    with pytest.raises(ValueError, match="one process"):
+        datagen.generate(Spec.from_dict(TANKS_SPEC), tmp_path / "a", log=_quiet, workers=2,
+                         solver={"ensemble": 3})
+
+
+def test_the_command_line_generates_ensembles(tmp_path, tanks, capsys):
+    spec = tmp_path / "spec.toml"
+    spec.write_text('''
+[study]
+name = "cli"
+case = "tanks"
+
+[base]
+structure = "cascade"
+
+[sweep]
+"tuning.level 1.Kc" = [-0.6, -0.4, -0.2]
+
+[run]
+t_end = 10.0
+dt = 1.0
+''')
+    assert main(["generate", str(spec), "--out", str(tmp_path / "d"), "--ensemble", "4"]) == 0
+    records = datagen.load_records(tmp_path / "d")
+    assert [r["status"] for r in records] == ["ok"] * 3
+    assert all(r["solver"] == {"ensemble": 4, "device": "cpu"} and r["ensemble_size"] == 3
+               for r in records)
