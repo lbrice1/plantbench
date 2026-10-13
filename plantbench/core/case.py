@@ -48,7 +48,7 @@ class Config:
     params           overrides of the case's parameters by dotted path, "reactor.U"
     setpoints        loop name -> set-point, replacing the design value
     setpoint_steps   loop name -> [(time, change), ...] during the run
-    tuning           loop name -> {"Kc", "tau_I", "lo", "hi"}
+    tuning           loop name -> {"Kc", "tau_I", "lo", "hi", "tau_D", "alpha"}
     instruments      loop name -> keyword arguments of `Instrument`
     actuators        loop name -> keyword arguments of `Actuator`
     disturbance      {"name": ..., **arguments}, or a list of them; empty for none

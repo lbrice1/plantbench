@@ -55,7 +55,7 @@ A configuration has these sections; every one except the structure may be omitte
 | `params` | parameter overrides by dotted path | `{"reactor.U": 300.0}` |
 | `setpoints` | loop name to set-point | `{"reactor T": 365.0}` |
 | `setpoint_steps` | loop name to (time, change) pairs | `{"reactor T": [(30.0, 1.0)]}` |
-| `tuning` | loop name to Kc, tau_I, lo, hi | `{"reactor T": {"Kc": -0.5}}` |
+| `tuning` | loop name to Kc, tau_I, lo, hi, tau_D, alpha | `{"reactor T": {"Kc": -0.5}}` |
 | `instruments` | loop name to `Instrument` arguments | `{"reactor C_A": {"deadtime": 5.0}}` |
 | `actuators` | loop name to `Actuator` arguments | `{"reactor T": {"tau": 0.5}}` |
 | `disturbance` | a named disturbance and its arguments, or a list of them | `{"name": "throughput", "fraction": 0.1}` |
@@ -73,6 +73,18 @@ config = case.config("temperature PI",
 ```
 
 The same operations are available on a structure directly: `control.with_setpoints`, `with_setpoint_steps`, `with_tuning` and `with_instruments`.
+
+Every loop is PI unless it is given a derivative time. With `tau_D` above zero, in minutes, a loop is PID in the ideal (ISA standard) form, with `Kc` multiplying every term and the derivative acting on the measurement through a first-order filter of time constant `alpha * tau_D` (`alpha` 0.1 by default):
+
+$$
+\mathrm{OP} = \mathrm{bias} + K_c\left(e + \frac{1}{\tau_I}\int e\,dt - \tau_D \frac{dz}{dt}\right), \qquad \alpha\tau_D \frac{dz}{dt} = \mathrm{PV} - z .
+$$
+
+The derivative acts on the measurement rather than the error, so a set-point step moves the output by the proportional term alone. The filter state `z` is one more augmented state, which starts at the measurement, so a run starts at rest. No case tunes a loop with derivative action, and a loop without it adds no state, so every reference result is unchanged.
+
+```python
+config = case.config("temperature PI", tuning={"reactor T": {"tau_D": 2.0}})
+```
 
 ## Non-idealities
 

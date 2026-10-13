@@ -38,9 +38,14 @@ def test_the_equation_of_state_on_the_device_is_the_one_on_the_host(setup):
             host.h(T, P, comp, phase), rtol=1e-11, atol=1e-8)
 
 
-def test_the_jacobian_on_the_device_is_the_one_on_the_host(setup):
+# Derivative action on the reflux loop, which adds a filter state to every member.
+PID = {"stage 4 temperature": {"tau_D": 0.5}}
+
+
+@pytest.mark.parametrize("tuning", [{}, PID], ids=["PI", "PID"])
+def test_the_jacobian_on_the_device_is_the_one_on_the_host(setup, tuning):
     _, s = setup
-    d, S = s.design, s.structure
+    d, S = s.design, ctl.with_tuning(s.structure, tuning)
     y0 = np.concatenate([d.x, ctl.initial_augmented(S, d)])
     args = (S, d.u, d.pp, None, d.rhs)
     J = ctl.jacobian_batched(0.0, y0, *args)
@@ -56,11 +61,13 @@ def test_a_run_on_the_device_agrees_with_one_on_the_host(setup):
     assert np.max(np.abs(dev.x - host.x) / (1e-6 + np.abs(host.x))) < 1e-6
 
 
-def test_an_ensemble_on_the_device_agrees_with_one_on_the_host(setup):
+@pytest.mark.parametrize("tuning", [{}, PID], ids=["PI", "PID"])
+def test_an_ensemble_on_the_device_agrees_with_one_on_the_host(setup, tuning):
     from plantbench.core.ensemble import integrate_ensemble
     case, s = setup
     d = s.design
-    S = [s.structure, ctl.with_tuning(s.structure, {"stage 4 temperature": {"Kc": -0.4}})]
+    base = ctl.with_tuning(s.structure, tuning)
+    S = [base, ctl.with_tuning(base, {"stage 4 temperature": {"Kc": -0.4}})]
     ds = [None, pb.build(case, case.config(disturbance={"name": "feed ethane",
                                                         "fraction": 0.1, "t": 0.5})).disturbance]
     rtol, atol = 1e-8, 1e-10

@@ -1,4 +1,4 @@
-"""PI control loops, the closed-loop simulator and its linearization, for any case.
+"""PI and PID control loops, the closed-loop simulator and its linearization, for any case.
 
 Control structures are declared as data.  A `Structure` is a list of `Loop`s, each
 naming a measurement, a manipulated variable and a tuning, so that comparing two
@@ -9,11 +9,12 @@ keeps the whole closed loop a single ODE system that a stiff integrator can hand
 makes the closed-loop Jacobian available for the stability arguments.
 
 A loop may also carry an `Instrument` on its measurement and an `Actuator` on its output,
-and those have states of their own.  The augmented vector is laid out with every integral
-first, in structure order, and any instrument and actuator states after them.  An ideal
-element contributes none, so a structure of ideal elements has exactly one augmented state
-per element and the layout is the one this model has always had --- which is what lets the
-published results be reproduced digit for digit while the seams exist.
+and those have states of their own, as has the filter of a loop with derivative action.
+The augmented vector is laid out with every integral first, in structure order, and any
+instrument, actuator and filter states after them.  An ideal PI element contributes none,
+so a structure of ideal PI elements has exactly one augmented state per element and the
+layout is the one this model has always had --- which is what lets the published results
+be reproduced digit for digit while the seams exist.
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ from scipy.integrate import solve_ivp
 from plantbench.backend import check as check_device
 from plantbench.backend import clamp, module, namespace, to_device, to_host
 
-from .instruments import Actuator, Instrument, stack_actuators, stack_instruments
+from .instruments import NEGLIGIBLE, Actuator, Instrument, stack_actuators, stack_instruments
 
 # How the Jacobian of the closed loop is formed; see `integrate`.
 JACOBIANS = ("internal", "batched")
@@ -37,7 +38,7 @@ JACOBIANS = ("internal", "batched")
 
 @dataclass
 class Loop:
-    """A single PI loop.
+    """A single PI or PID loop.
 
     `measure` maps the plant state, the current inputs and the parameters to the
     controlled variable.  `mv` names the field of the inputs the loop writes, or
@@ -51,6 +52,19 @@ class Loop:
     span, as a simulator such as HYSYS reports them (`percent_signals`, `percent_gain`).
     The measurement is not clamped to its span: that would make the right-hand side
     non-smooth at the limits and change the dynamics of every published result.
+
+    The control law is the ideal (ISA standard) form, Kc multiplying every term, with the
+    derivative acting on the filtered measurement rather than on the error, so that a
+    set-point change gives no derivative kick:
+
+        OP = bias + Kc (e + I / tau_I - tau_D dz/dt),
+        dz/dt = (pv - z) / (alpha tau_D),
+
+    with e = SP - pv and dI/dt = e.  The filter state z is one augmented state, and with it
+    tau_D dz/dt = (pv - z) / alpha: the derivative of the measurement through a first-order
+    filter of time constant alpha tau_D, formed without differentiating the plant.  The
+    right-hand side stays continuous.  A loop with tau_D = 0, the default, is a PI loop
+    and has no filter state.
     """
 
     name: str
@@ -70,15 +84,48 @@ class Loop:
     instrument: Instrument | None = None
     actuator: Actuator | None = None
     pv_range: tuple[float, float] | None = None
+    # Derivative time, min, and the derivative filter's time constant as a fraction of it.
+    tau_D: float = 0.0
+    alpha: float = 0.1
 
-    def output(self, pv: float, integral: float) -> tuple[float, float]:
-        """PI output with clamping.  Returns the clamped value and the unclamped one."""
+    def __post_init__(self) -> None:
+        if self.tau_D < 0.0:
+            raise ValueError(f"loop {self.name!r}: tau_D must not be negative")
+        if not 0.0 < self.alpha <= 1.0:
+            raise ValueError(f"loop {self.name!r}: alpha must be in (0, 1]")
+
+    @property
+    def n_filter_states(self) -> int:
+        """1 for a loop with derivative action, which filters its measurement; else 0."""
+        return 1 if self.tau_D > NEGLIGIBLE else 0
+
+    def output(self, pv: float, integral: float, z=None) -> tuple[float, float]:
+        """PI output with clamping, or PID output given the filter state z.  Returns the
+        clamped value and the unclamped one."""
         if self.setpoint is None:
             raise ValueError(f"loop {self.name!r} has no set-point; build the structure "
                              "with bias_from_design, or set one explicitly")
         e = self.setpoint - pv
-        raw = self.bias + self.Kc * (e + integral / self.tau_I)
+        if z is None:
+            raw = self.bias + self.Kc * (e + integral / self.tau_I)
+        else:
+            raw = self.bias + self.Kc * (e + integral / self.tau_I - (pv - z) / self.alpha)
         return clamp(raw, self.lo, self.hi), raw
+
+
+@dataclass
+class _StackedLoop(Loop):
+    """A loop of an ensemble (`stack`): its fields hold one value per member or per row,
+    and its layout is the members' common one, so that it is not recomputed from arrays."""
+
+    n_filter: int = 0
+
+    def __post_init__(self) -> None:  # the members were validated when constructed
+        pass
+
+    @property
+    def n_filter_states(self) -> int:
+        return self.n_filter
 
 
 @dataclass
@@ -107,12 +154,13 @@ Structure = list[Loop | Ratio]
 # --------------------------------------------------------------------------------
 
 
-def state_layout(structure: Structure) -> tuple[list[tuple[slice, slice]], int]:
-    """Where each element's instrument and actuator states live in the augmented vector.
+def state_layout(structure: Structure) -> tuple[list[tuple[slice, slice, slice]], int]:
+    """Where each element's instrument, actuator and derivative-filter states live in the
+    augmented vector.
 
     Integrals occupy the first `len(structure)` entries, in structure order, and the
-    instrument and actuator states of each element follow.  An ideal element contributes
-    neither, so an ideal structure gives `(empty slices, len(structure))`.
+    instrument, actuator and filter states of each element follow.  An ideal PI element
+    contributes none, so such a structure gives `(empty slices, len(structure))`.
     """
     off = len(structure)
     slots = []
@@ -121,8 +169,10 @@ def state_layout(structure: Structure) -> tuple[list[tuple[slice, slice]], int]:
         act = getattr(element, "actuator", None)
         ni = inst.n_states if inst is not None else 0
         na = act.n_states if act is not None else 0
-        slots.append((slice(off, off + ni), slice(off + ni, off + ni + na)))
-        off += ni + na
+        nf = getattr(element, "n_filter_states", 0)
+        slots.append((slice(off, off + ni), slice(off + ni, off + ni + na),
+                      slice(off + ni + na, off + ni + na + nf)))
+        off += ni + na + nf
     return slots, off
 
 
@@ -138,16 +188,20 @@ def initial_augmented(structure: Structure, design) -> np.ndarray:
     that the reported measurement equals the true one, and actuator states so that the
     valve already sits at its design position; otherwise a non-ideal structure would begin
     every run with a transient that has nothing to do with the disturbance under study.
+    A derivative filter starts at the measurement, so the derivative term starts at zero.
     """
     slots, n_aug = state_layout(structure)
     aug = np.zeros(n_aug)
     if n_aug == len(structure):
         return aug
     for k, element in enumerate(structure):
-        i_slot, a_slot = slots[k]
+        i_slot, a_slot, f_slot = slots[k]
         inst = getattr(element, "instrument", None)
         if inst is not None and inst.n_states:
             aug[i_slot] = inst.initial(element.measure(design.x, design.u, design.pp))
+        if getattr(element, "n_filter_states", 0):
+            # An instrument starts at rest, reporting the true value.
+            aug[f_slot] = element.measure(design.x, design.u, design.pp)
         act = getattr(element, "actuator", None)
         if act is not None and act.n_states:
             aug[a_slot] = act.initial(getattr(design.u, element.mv))
@@ -189,7 +243,13 @@ def apply(structure: Structure, x: np.ndarray, aug: np.ndarray, u0,
             pv = inst.output(i_states, true_pv)
             if inst.n_states:
                 d_integ[..., slots[k][0]] = inst.derivatives(i_states, true_pv)
-        value, raw = loop.output(pv, aug[..., k])
+        f_slot = slots[k][2]
+        if loop.n_filter_states:
+            z = aug[..., f_slot.start]
+            value, raw = loop.output(pv, aug[..., k], z)
+            d_integ[..., f_slot.start] = (pv - z) / (loop.alpha * loop.tau_D)
+        else:
+            value, raw = loop.output(pv, aug[..., k])
         if signals is not None:
             signals[f"{loop.name}.SP"] = loop.setpoint
             signals[f"{loop.name}.PV"] = pv
@@ -338,7 +398,7 @@ def _jacobian_callback(design, structure, disturbance, device: str):
 # on t, which is then an array of one time per row.
 
 # The fields of a loop or a ratio station that may differ between members.
-_LOOP_FIELDS = ("Kc", "tau_I", "setpoint", "bias", "lo", "hi")
+_LOOP_FIELDS = ("Kc", "tau_I", "setpoint", "bias", "lo", "hi", "tau_D", "alpha")
 _RATIO_FIELDS = ("ratio", "lo", "hi")
 
 
@@ -363,7 +423,7 @@ def layout_signature(structure: Structure) -> tuple:
     variables, and the augmented-state layout."""
     slots, n_aug = state_layout(structure)
     kinds = tuple((type(e).__name__, e.name, e.mv) for e in structure)
-    return kinds, tuple((s[0].stop - s[0].start, s[1].stop - s[1].start) for s in slots), n_aug
+    return kinds, tuple(tuple(part.stop - part.start for part in s) for s in slots), n_aug
 
 
 def stack(structures: list[Structure], xp=np) -> Structure:
@@ -387,6 +447,11 @@ def stack(structures: list[Structure], xp=np) -> Structure:
         if isinstance(element, Loop):
             changes["instrument"] = stack_instruments([m.instrument for m in members], xp)
             changes["sp_schedule"] = _stack_schedules([m.sp_schedule for m in members], xp)
+            changes["actuator"] = stack_actuators([m.actuator for m in members], xp)
+            fields = {f.name: getattr(element, f.name) for f in dataclasses.fields(Loop)}
+            out.append(_StackedLoop(**{**fields, **changes},
+                                    n_filter=element.n_filter_states))
+            continue
         changes["actuator"] = stack_actuators([m.actuator for m in members], xp)
         out.append(replace(element, **changes))
     return out
@@ -835,14 +900,15 @@ def with_setpoint_steps(structure: Structure,
     return out
 
 
-TUNABLE = ("Kc", "tau_I", "lo", "hi")
+TUNABLE = ("Kc", "tau_I", "lo", "hi", "tau_D", "alpha")
 
 
 def with_tuning(structure: Structure, tuning: dict[str, dict[str, float]]) -> Structure:
     """A copy of `structure` with the named loops retuned.
 
-    `tuning` maps a loop name to any of Kc, tau_I, lo and hi.  The bias is not changed,
-    so a retuned loop still starts at rest at the design point.
+    `tuning` maps a loop name to any of Kc, tau_I, lo, hi, tau_D and alpha.  The bias is
+    not changed, so a retuned loop still starts at rest at the design point.  A tau_D
+    above zero gives the loop derivative action and a filter state (`Loop`).
     """
     _check_names(structure, tuning)
     for name, values in tuning.items():
