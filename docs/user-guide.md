@@ -36,6 +36,7 @@ traj.x                  # states, (n_states, n_times)
 traj.state("T")         # one state by name
 traj.u["Fj"]            # every input, and derived signals such as `reactor_separator_recycle`'s recycle
 traj.y["T"]             # the case's named measurements
+traj.c["reactor T.SP"]  # each loop's set-point, measurement and output (Controller signals)
 traj.wall_time, traj.nfev
 traj.window(300.0, 600.0)
 traj.to_npz("run.npz")
@@ -84,6 +85,21 @@ config = pb.load_case("reactor_separator_recycle").config(
 ```
 
 An unconfigured element adds no states, so a configuration without non-idealities reproduces the reference results exactly.
+
+## Controller signals
+
+A run records the signals of each loop in `traj.c`, under the loop's name:
+
+| Key | Signal |
+|---|---|
+| `<loop>.SP` | the set-point in force, after any set-point step and any primary's write |
+| `<loop>.PV` | the measurement the controller sees, after its instrument |
+| `<loop>.OP` | the output it commands, before its actuator; a primary's is its secondary's set-point |
+| `<loop>.PV%`, `<loop>.OP%` | the same in percent of span, where the loop declares one |
+
+A ratio station records `<station>.OP` only. The true measurement is in `traj.y`, and the input the plant receives, after the actuator, in `traj.u`. Where the HYSYS tags and these signals differ in name, the loop is named after its measurement: TIC-100 of the deethanizer is `stage 28 temperature`.
+
+The span of a measurement is the loop's `pv_range`, (PV_min, PV_max) in its units, and the span of an output is (`lo`, `hi`). The NGL cases take theirs from the HYSYS controllers, and the reactor cases declare spans of their own choosing, marked as such in their definitions. A span only scales the recorded signals: the measurement is not clamped to it. `control.percent_gain(loop)` gives the gain in percent of output span per percent of measurement span, the form HYSYS states a tuning in, negative for a direct-acting loop.
 
 ## Disturbances
 

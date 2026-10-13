@@ -43,6 +43,22 @@ REACTOR_T_TUNING = {"Kc": -1.0, "tau_I": 20.0}
 TEMPERATURE_TRAY = 17
 TRAY_T_TUNING = {"Kc": 2.0, "tau_I": 10.0}  # kmol/min per K, min
 
+# The measurement spans, which serve only to express the signals in percent of span
+# (`control.percent_signals`).  The reference gives no transmitter ranges, so each is a
+# [choice]: holdups from empty to twice their design value, the reactor temperature over
+# the range the composition primary moves its set-point in, the reactor concentration up
+# to that of the inlet, C_A0 = 5 kmol/m3, and the tray and feed temperatures over 50 K
+# about their design values of 386 K and 337 K.
+PV_RANGES = {
+    "reactor T": (340.0, 385.0),  # K
+    "reactor C_A": (0.0, 5.0),  # kmol/m3
+    "reactor level": (0.0, 45.64),  # m3, twice V_nominal = 22.82
+    "drum level": (0.0, 24.0),  # kmol, twice the 12 kmol drum holdup
+    "base level": (0.0, 13.8),  # kmol, twice the 6.896 kmol base holdup
+    "tray T": (360.0, 410.0),  # K
+    "feed T": (310.0, 360.0),  # K
+}
+
 
 def column_loops(P: float) -> ctl.Structure:
     """Tray temperature on the boil-up, and the reflux ratioed to the column feed.
@@ -54,21 +70,24 @@ def column_loops(P: float) -> ctl.Structure:
     """
     return [
         Loop("tray T", meas.m_tray_T(TEMPERATURE_TRAY, P), "V_boil", **TRAY_T_TUNING,
-             lo=10.0, hi=60.0),
+             lo=10.0, hi=60.0, pv_range=PV_RANGES["tray T"]),
         # The reflux valve has the same 40 kmol/min limit as in the other structures.
         Ratio("reflux/feed", "L_reflux", "F_out", lo=1.0, hi=40.0),
     ]
 
 
 def _reactor_T() -> Loop:
-    return Loop("reactor T", meas.m_reactor_T, "Fj", **REACTOR_T_TUNING, lo=0.05, hi=6.0)
+    return Loop("reactor T", meas.m_reactor_T, "Fj", **REACTOR_T_TUNING, lo=0.05, hi=6.0,
+                pv_range=PV_RANGES["reactor T"])
 
 
 def _column_levels() -> ctl.Structure:
     # Both levels are held by a stream leaving the vessel, so the gains are negative.
     return [
-        Loop("drum level", meas.m_drum_level, "D", Kc=-2.0, tau_I=20.0, lo=0.5, hi=25.0),
-        Loop("base level", meas.m_base_level, "Bm", Kc=-2.0, tau_I=20.0, lo=0.5, hi=25.0),
+        Loop("drum level", meas.m_drum_level, "D", Kc=-2.0, tau_I=20.0, lo=0.5, hi=25.0,
+             pv_range=PV_RANGES["drum level"]),
+        Loop("base level", meas.m_base_level, "Bm", Kc=-2.0, tau_I=20.0, lo=0.5, hi=25.0,
+             pv_range=PV_RANGES["base level"]),
     ]
 
 
@@ -84,7 +103,7 @@ def recycle_free(design: Design) -> ctl.Structure:
         _reactor_T(),
         # Level held by the outflow: negative gain.
         Loop("reactor level", meas.m_reactor_volume, "F_out", Kc=-1.0, tau_I=30.0,
-             lo=0.5, hi=8.0),
+             lo=0.5, hi=8.0, pv_range=PV_RANGES["reactor level"]),
         *_column_levels(),
         *column_loops(P),
     ]
@@ -96,7 +115,7 @@ def _effluent_fixed_loops(P: float) -> ctl.Structure:
         _reactor_T(),
         # Level held by an inflow: positive gain.
         Loop("reactor level", meas.m_reactor_volume, "F_fresh", Kc=1.5, tau_I=30.0,
-             lo=0.5, hi=25.0),
+             lo=0.5, hi=25.0, pv_range=PV_RANGES["reactor level"]),
         *_column_levels(),
         *column_loops(P),
     ]
@@ -118,7 +137,7 @@ def plantwide_loops(P: float) -> ctl.Structure:
     """The reference structure's loops at column pressure P, before biases are set from a design."""
     loops = _effluent_fixed_loops(P)
     loops.insert(1, Loop("reactor C_A", meas.m_reactor_CA, "sp:reactor T", Kc=-6.0,
-                         tau_I=120.0, lo=340.0, hi=385.0))
+                         tau_I=120.0, lo=340.0, hi=385.0, pv_range=PV_RANGES["reactor C_A"]))
     return loops
 
 
@@ -145,10 +164,11 @@ def distillate_fixed(design: Design) -> ctl.Structure:
     loops = [
         _reactor_T(),
         Loop("reactor level", meas.m_reactor_volume, "F_out", Kc=-1.0, tau_I=30.0,
-             lo=0.5, hi=8.0),
+             lo=0.5, hi=8.0, pv_range=PV_RANGES["reactor level"]),
         Loop("drum level", meas.m_drum_level, "L_reflux", Kc=-2.0, tau_I=20.0,
-             lo=1.0, hi=40.0),
-        Loop("base level", meas.m_base_level, "Bm", Kc=-2.0, tau_I=20.0, lo=0.5, hi=25.0),
+             lo=1.0, hi=40.0, pv_range=PV_RANGES["drum level"]),
+        Loop("base level", meas.m_base_level, "Bm", Kc=-2.0, tau_I=20.0, lo=0.5, hi=25.0,
+             pv_range=PV_RANGES["base level"]),
         column_loops(P)[0],  # the reflux is on drum level, so there is no ratio
     ]
     return ctl.bias_from_design(loops, design)

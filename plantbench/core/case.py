@@ -281,7 +281,9 @@ class Trajectory:
     `x` is (n_states, n_times) with one name per row in `state_names`; `u` and `y` map
     names to arrays of n_times.  `wall_time` and `nfev` record what the run cost, which
     varies by more than an order of magnitude across a design space and is informative
-    in its own right.
+    in its own right.  `c` maps "<loop>.SP", "<loop>.PV" and "<loop>.OP" to the
+    signals of each loop, with "<loop>.PV%" and "<loop>.OP%" where the loop declares its
+    spans (`control.apply`, `control.percent_signals`).
     """
 
     case: str
@@ -293,6 +295,7 @@ class Trajectory:
     y: dict[str, np.ndarray]
     wall_time: float = np.nan
     nfev: int = -1
+    c: dict[str, np.ndarray] = field(default_factory=dict)
 
     def state(self, name: str) -> np.ndarray:
         return self.x[self.state_names.index(name)]
@@ -302,17 +305,24 @@ class Trajectory:
         m = (self.t >= t0) & (self.t <= t1)
         return replace(self, t=self.t[m], x=self.x[:, m],
                        u={k: v[m] for k, v in self.u.items()},
-                       y={k: v[m] for k, v in self.y.items()})
+                       y={k: v[m] for k, v in self.y.items()},
+                       c={k: v[m] for k, v in self.c.items()})
 
     def to_npz(self, path) -> None:
+        """Write the run to `path`.  A run without controller signals, an open-loop one,
+        is written without the array `c`, as every run was before they were recorded."""
         meta = dict(case=self.case, config=self.config, wall_time=self.wall_time,
                     nfev=self.nfev, state_names=self.state_names,
                     u_names=list(self.u), y_names=list(self.y))
+        arrays = {}
+        if self.c:
+            meta["c_names"] = list(self.c)
+            arrays["c"] = np.array([self.c[k] for k in self.c]).reshape(len(self.c), -1)
         np.savez_compressed(
             path, t=self.t, x=self.x,
             u=np.array([self.u[k] for k in self.u]).reshape(len(self.u), -1),
             y=np.array([self.y[k] for k in self.y]).reshape(len(self.y), -1),
-            meta=np.array(json.dumps(meta)),
+            meta=np.array(json.dumps(meta)), **arrays,
         )
 
     @classmethod
@@ -323,7 +333,8 @@ class Trajectory:
                        state_names=meta["state_names"],
                        u=dict(zip(meta["u_names"], f["u"])),
                        y=dict(zip(meta["y_names"], f["y"])),
-                       wall_time=meta["wall_time"], nfev=meta["nfev"])
+                       wall_time=meta["wall_time"], nfev=meta["nfev"],
+                       c=dict(zip(meta.get("c_names", []), f["c"])) if "c" in f else {})
 
 
 def run(case: Case, config: Config | Mapping, t_end: float, n_points: int | None = None,
@@ -350,7 +361,7 @@ def run(case: Case, config: Config | Mapping, t_end: float, n_points: int | None
                       jacobian=jacobian, device=device)
     return Trajectory(case=case.id, config=setup.config.to_dict(), t=r.t, x=r.X,
                       state_names=list(case.state_names(setup.design)), u=r.U, y=r.Y,
-                      wall_time=time.perf_counter() - start, nfev=r.nfev)
+                      wall_time=time.perf_counter() - start, nfev=r.nfev, c=r.C)
 
 
 @dataclass
@@ -404,12 +415,12 @@ def run_setups(setups: list[Setup], t_end: float, n_points: int | None = None,
                                                           f"{r.message[j]}"), len(chunk),
                                        r.wall_time)
                 else:
-                    U, Y = ctl.batch_outputs(design, s.structure, s.disturbance, r.t, r.Y[j],
-                                             s.case.measurements(design))
+                    U, Y, C = ctl.batch_outputs(design, s.structure, s.disturbance, r.t,
+                                                r.Y[j], s.case.measurements(design))
                     traj = Trajectory(case=s.case.id, config=s.config.to_dict(), t=r.t,
                                       x=r.Y[j, :, :n].T.copy(),
                                       state_names=list(s.case.state_names(design)), u=U, y=Y,
-                                      wall_time=share, nfev=int(r.nfev[j]))
+                                      wall_time=share, nfev=int(r.nfev[j]), c=C)
                     res = MemberResult(traj, None, len(chunk), r.wall_time)
                 results[k] = res
     return results

@@ -45,6 +45,12 @@ class Loop:
     the sign: a negative gain means raising the manipulated variable lowers the
     measurement.  A set-point of None means the design value, which `bias_from_design`
     fills in.
+
+    `pv_range` is the transmitter's span, (PV_min, PV_max) in the units of the measure,
+    and `(lo, hi)` the output's.  They serve only to express the signals in percent of
+    span, as a simulator such as HYSYS reports them (`percent_signals`, `percent_gain`).
+    The measurement is not clamped to its span: that would make the right-hand side
+    non-smooth at the limits and change the dynamics of every published result.
     """
 
     name: str
@@ -63,6 +69,7 @@ class Loop:
     # the configuration every published result was produced with.
     instrument: Instrument | None = None
     actuator: Actuator | None = None
+    pv_range: tuple[float, float] | None = None
 
     def output(self, pv: float, integral: float) -> tuple[float, float]:
         """PI output with clamping.  Returns the clamped value and the unclamped one."""
@@ -148,11 +155,18 @@ def initial_augmented(structure: Structure, design) -> np.ndarray:
 
 
 def apply(structure: Structure, x: np.ndarray, aug: np.ndarray, u0,
-          pp, t: float = 0.0) -> tuple[Any, np.ndarray]:
+          pp, t: float = 0.0, signals: dict | None = None) -> tuple[Any, np.ndarray]:
     """Evaluate every loop and return the resulting inputs and the augmented rates.
 
     For a batch, `x` is (m, n), `aug` (m, n_aug) and the fields of `u0` carry the same
-    leading axis (`batch_inputs`); the measures must then accept a batch as well."""
+    leading axis (`batch_inputs`); the measures must then accept a batch as well.
+
+    Given a dict as `signals`, `apply` also records each loop's signals in it, under
+    "<loop>.SP", the live set-point, after the schedule and any primary's write;
+    "<loop>.PV", the measurement the controller sees, after its instrument; and
+    "<loop>.OP", the output it commands, before its actuator, which for a primary is the
+    secondary's set-point.  A ratio station records its output only.  This is the only
+    place a secondary's live set-point exists."""
     u = replace(u0)
     slots, n_aug = state_layout(structure)
     d_integ = namespace(x).zeros(x.shape[:-1] + (n_aug,))
@@ -176,6 +190,10 @@ def apply(structure: Structure, x: np.ndarray, aug: np.ndarray, u0,
             if inst.n_states:
                 d_integ[..., slots[k][0]] = inst.derivatives(i_states, true_pv)
         value, raw = loop.output(pv, aug[..., k])
+        if signals is not None:
+            signals[f"{loop.name}.SP"] = loop.setpoint
+            signals[f"{loop.name}.PV"] = pv
+            signals[f"{loop.name}.OP"] = value
         if loop.mv.startswith("sp:"):
             target = loop.mv[3:]
             for j, other in enumerate(live):
@@ -203,6 +221,8 @@ def apply(structure: Structure, x: np.ndarray, aug: np.ndarray, u0,
         if isinstance(station, Ratio):
             value = station.ratio * getattr(u, station.source)
             value = clamp(value, station.lo, station.hi)
+            if signals is not None:
+                signals[f"{station.name}.OP"] = value
             act = station.actuator
             if act is None:
                 setattr(u, station.mv, value)
@@ -445,17 +465,19 @@ def ensemble_jacobian(t_rows, y, stacked_rows: Structure, inputs, pp, model):
 
 
 def batch_outputs(design, structure: Structure, disturbance, t: np.ndarray, Y: np.ndarray,
-                  measurements: dict[str, Callable]) -> tuple[dict, dict]:
-    """The inputs and the measurements of one run at its grid points, as `integrate`
-    records them, but in one batched evaluation: `Y` (n_times, n + n_aug) holds the
-    closed-loop states at times `t`.  The design and the measures must accept a batch.
+                  measurements: dict[str, Callable]) -> tuple[dict, dict, dict]:
+    """The inputs, the measurements and the controller signals of one run at its grid
+    points, as `integrate` records them, but in one batched evaluation: `Y`
+    (n_times, n + n_aug) holds the closed-loop states at times `t`.  The design and the
+    measures must accept a batch.
     Rows that are not finite, those after a member stopped, are NaN."""
     n = len(design.x)
     ok = np.flatnonzero(np.isfinite(Y).all(axis=1))
     m = ok.size
     S = take(stack([structure]), np.zeros(m, dtype=int))
     inputs = ensemble_inputs(t[ok], [disturbance] * m, design.u, np.arange(m))
-    u, _ = apply(S, Y[ok, :n], Y[ok, n:], inputs, design.pp, t[ok])
+    signals: dict = {}
+    u, _ = apply(S, Y[ok, :n], Y[ok, n:], inputs, design.pp, t[ok], signals)
 
     def full(v):
         out = np.full(len(t), np.nan)
@@ -474,7 +496,8 @@ def batch_outputs(design, structure: Structure, disturbance, t: np.ndarray, Y: n
                 U[f"{f.name}[{k}]"] = full(v[:, k])
     U.update({name: full(g(u)) for name, g in getattr(design, "derived", {}).items()})
     Ym = {name: full(g(Y[ok, :n], u, design.pp)) for name, g in measurements.items()}
-    return U, Ym
+    C = {name: full(v) for name, v in signals.items()}
+    return U, Ym, percent_signals(structure, C)
 
 
 class WallTimeExceeded(RuntimeError):
@@ -483,13 +506,15 @@ class WallTimeExceeded(RuntimeError):
 
 @dataclass
 class Run:
-    """What `integrate` returns: states, inputs, measurements and the solver's cost."""
+    """What `integrate` returns: states, inputs, measurements, the solver's cost and the
+    controller signals (`apply`, `percent_signals`)."""
 
     t: np.ndarray
     X: np.ndarray
     U: dict[str, np.ndarray]
     Y: dict[str, np.ndarray]
     nfev: int
+    C: dict[str, np.ndarray] = dataclasses.field(default_factory=dict)
 
 
 def integrate(
@@ -513,7 +538,9 @@ def integrate(
     input (an array-valued input contributes one entry per element, `name[i]`, and an
     input that is None is recorded as NaN), plus any derived signals the design declares
     in `design.derived`, a mapping from name to a function of the inputs.  `Y` holds the
-    named `measurements`, each a function of (x, u, pp), evaluated on the same grid.
+    named `measurements`, each a function of (x, u, pp), evaluated on the same grid, and
+    `C` the signals of every loop, as `apply` records them, with their percentages of span
+    where the loop declares one (`percent_signals`).
 
     A `wall_budget` in seconds raises `WallTimeExceeded` once the integration has run
     that long.  The check is a terminal event, which the solver evaluates between its
@@ -572,17 +599,21 @@ def integrate(
     measurements = measurements or {}
     U: dict[str, np.ndarray] = {}
     Y = {name: np.empty(sol.t.size) for name in measurements}
+    C: dict[str, np.ndarray] = {}
     for i, ti in enumerate(sol.t):
         base = design.u if disturbance is None else disturbance(ti, design.u)
         x = sol.y[:n, i]
-        u, _ = apply(structure, x, sol.y[n:, i], base, pp, ti)
+        signals: dict = {}
+        u, _ = apply(structure, x, sol.y[n:, i], base, pp, ti, signals)
+        for name, v in signals.items():
+            C.setdefault(name, np.empty(sol.t.size))[i] = v
         values = input_values(u)
         values.update({name: float(f(u)) for name, f in derived.items()})
         for name, v in values.items():
             U.setdefault(name, np.full(sol.t.size, np.nan))[i] = v
         for name, f in measurements.items():
             Y[name][i] = f(x, u, pp)
-    return Run(sol.t, sol.y[:n, :], U, Y, nfev)
+    return Run(sol.t, sol.y[:n, :], U, Y, nfev, percent_signals(structure, C))
 
 
 @dataclass
@@ -682,6 +713,36 @@ def input_values(u) -> dict[str, float]:
             for k, vk in enumerate(np.ravel(v)):
                 out[f"{f.name}[{k}]"] = float(vk)
     return out
+
+
+def percent_signals(structure: Structure, C: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """The signals `C` with their percentages of span added, as a simulator such as HYSYS
+    reports them: "<loop>.PV%" where the loop declares a `pv_range`, and "<loop>.OP%"
+    where its output range `(lo, hi)` is finite.  The set-point is in the measurement's
+    span, so it is not repeated in percent."""
+    out = dict(C)
+    for e in structure:
+        pv_range = getattr(e, "pv_range", None)
+        if pv_range is not None and f"{e.name}.PV" in C:
+            out[f"{e.name}.PV%"] = _percent(C[f"{e.name}.PV"], *pv_range)
+        if np.isfinite(e.hi) and f"{e.name}.OP" in C:
+            out[f"{e.name}.OP%"] = _percent(C[f"{e.name}.OP"], e.lo, e.hi)
+    return out
+
+
+def _percent(v, lo: float, hi: float):
+    return 100.0 * (v - lo) / (hi - lo)
+
+
+def percent_gain(loop: Loop) -> float | None:
+    """The loop's gain in percent of output span per percent of measurement span, the
+    form in which HYSYS states a tuning, with the action as its sign: negative for a
+    direct-acting loop.  None without both spans.  For display: a loop is tuned in
+    engineering units."""
+    if loop.pv_range is None or not np.isfinite(loop.hi):
+        return None
+    pv_lo, pv_hi = loop.pv_range
+    return float(loop.Kc * (pv_hi - pv_lo) / (loop.hi - loop.lo))
 
 
 def bias_from_design(structure: Structure, design) -> Structure:

@@ -50,16 +50,20 @@ m_Tj = state_measurement("Tj", LAYOUT)
 # here, and a gain of -10 falls below 0.1.
 TEMPERATURE_TUNING = {"Kc": -1.0, "tau_I": 20.0}  # m3/min per K, min
 COMPOSITION_TUNING = {"Kc": -3.0, "tau_I": 20.0}  # K per kmol/m3, min
+# The measurement spans, `reactor_separator_recycle`'s for the same reactor [choice].
+PV_RANGES = {"reactor T": (340.0, 385.0), "reactor C_A": (0.0, 5.0)}  # K, kmol/m3
 
 
 def temperature_loop() -> Loop:
     """Reactor temperature on the coolant flow: the loop that stabilizes the reactor."""
-    return Loop("reactor T", m_T, "Fj", **TEMPERATURE_TUNING, lo=0.05, hi=6.0)
+    return Loop("reactor T", m_T, "Fj", **TEMPERATURE_TUNING, lo=0.05, hi=6.0,
+                pv_range=PV_RANGES["reactor T"])
 
 
 def composition_loop() -> Loop:
     """Reactor concentration on the temperature set-point, the reference cascade."""
-    return Loop("reactor C_A", m_CA, "sp:reactor T", **COMPOSITION_TUNING, lo=340.0, hi=385.0)
+    return Loop("reactor C_A", m_CA, "sp:reactor T", **COMPOSITION_TUNING, lo=340.0, hi=385.0,
+                pv_range=PV_RANGES["reactor C_A"])
 
 
 STRUCTURES = {

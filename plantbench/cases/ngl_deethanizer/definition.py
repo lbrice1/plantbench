@@ -114,30 +114,33 @@ def measurements(design: Design) -> dict:
 # raising the manipulated variable lowers the measurement; integral times in minutes.  The
 # starting point was the HYSYS case's own tuning, in percent of its ranges, converted to
 # these units: a "Direct" HYSYS controller has a negative gain here, a "Reverse" one a
-# positive gain.
+# positive gain.  `pv_range` is the HYSYS controller's PV span [H], in the units of the
+# measure (`hysys_reference.json`, controllers); the output spans are lo and hi.
 TUNING = {
-    # TIC-102: E-100 duty, kW per K.  [H] 6.33 %/%, PV 0 to 80 C, OP 0 to 833 kW, 101 s
-    "feed temperature": dict(Kc=66.0, tau_I=1.68, lo=0.0, hi=833.3),
-    # PIC-100: condenser duty, kW per kPa.  [H] 17.9 %/%, PV 0 to 3500 kPa, OP 0 to
-    # 2500 kW, 304 s
-    "overhead pressure": dict(Kc=-12.8, tau_I=5.06, lo=0.0, hi=2500.0),
+    # TIC-102: E-100 duty, kW per K.  [H] 6.33 %/%, OP 0 to 833 kW, 101 s
+    "feed temperature": dict(Kc=66.0, tau_I=1.68, lo=0.0, hi=833.3, pv_range=(0.0, 80.0)),
+    # PIC-100: condenser duty, kW per kPa.  [H] 17.9 %/%, OP 0 to 2500 kW, 304 s
+    "overhead pressure": dict(Kc=-12.8, tau_I=5.06, lo=0.0, hi=2500.0,
+                              pv_range=(0.0, 3500.0)),
     # LIC-100: VLV-101 opening per % level.  [H] 5 %/%, 42 s
-    "condenser level": dict(Kc=-0.05, tau_I=0.7, lo=0.0, hi=1.0),
+    "condenser level": dict(Kc=-0.05, tau_I=0.7, lo=0.0, hi=1.0, pv_range=(0.0, 100.0)),
     # LIC-101: VLV-102 opening per % level.  [H] 3 %/%, 42 s
-    "reboiler level": dict(Kc=-0.03, tau_I=0.7, lo=0.0, hi=1.0),
+    "reboiler level": dict(Kc=-0.03, tau_I=0.7, lo=0.0, hi=1.0, pv_range=(0.0, 100.0)),
     # TIC-101, cascaded on FIC-101, which is ideal here: reflux, kmol/min per K.  [H]
-    # 13 %/%, PV 0 to 200 C, FIC-101 set-point 0 to 1000 kmol/h, 210 s: -1.08 kmol/min
-    # per K, which damps the closed loop at 0.235; a quarter of it, 0.445.
-    "stage 4 temperature": dict(Kc=-0.25, tau_I=3.5, lo=0.0, hi=1000.0 / 60),
-    # TIC-100: reboiler duty, kW per K.  [H] 10.5 %/%, PV -5 to 140 C, OP 0 to 5556 kW, 88 s
-    "stage 28 temperature": dict(Kc=402.0, tau_I=1.47, lo=0.0, hi=5555.6),
+    # 13 %/%, FIC-101 set-point 0 to 1000 kmol/h, 210 s: -1.08 kmol/min per K, which
+    # damps the closed loop at 0.235; a quarter of it, 0.445.
+    "stage 4 temperature": dict(Kc=-0.25, tau_I=3.5, lo=0.0, hi=1000.0 / 60,
+                                pv_range=(0.0, 200.0)),
+    # TIC-100: reboiler duty, kW per K.  [H] 10.5 %/%, OP 0 to 5556 kW, 88 s
+    "stage 28 temperature": dict(Kc=402.0, tau_I=1.47, lo=0.0, hi=5555.6,
+                                 pv_range=(-5.0, 140.0)),
 }
 # XIC-100, the composition cascade's primary: the TIC-100 set-point, K per unit mole
-# fraction.  [H] 20 %/%, PV 0 to 1, OP the TIC-100 range, -5 to 140 C, 66 s: -2900 K
-# and 1.1 min, which with TIC-101 retuned damps the cascade at 0.398.  Its proportional
-# action passes through TIC-100's to the reboiler duty, and a twelfth of the gain over
-# five minutes gives 0.427.
-COMPOSITION = dict(Kc=-250.0, tau_I=5.0, lo=-5.0, hi=140.0)
+# fraction.  [H] 20 %/%, OP the TIC-100 range, -5 to 140 C, 66 s: -2900 K and 1.1 min,
+# which with TIC-101 retuned damps the cascade at 0.398.  Its proportional action passes
+# through TIC-100's to the reboiler duty, and a twelfth of the gain over five minutes
+# gives 0.427.
+COMPOSITION = dict(Kc=-250.0, tau_I=5.0, lo=-5.0, hi=140.0, pv_range=(0.0, 1.0))
 
 
 def _loop(m: dict, name: str, mv: str) -> ctl.Loop:
