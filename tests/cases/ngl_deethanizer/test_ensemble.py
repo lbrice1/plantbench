@@ -43,6 +43,9 @@ def test_members_agree_with_their_serial_runs(case, results):
             np.testing.assert_allclose(tr.y[k], ref.y[k], rtol=1e-6, atol=1e-9, err_msg=k)
         for k in ref.u:
             np.testing.assert_allclose(tr.u[k], ref.u[k], rtol=1e-6, atol=1e-9, err_msg=k)
+        assert list(tr.c) == list(ref.c)
+        for k in ref.c:
+            np.testing.assert_allclose(tr.c[k], ref.c[k], rtol=1e-6, atol=1e-9, err_msg=k)
 
 
 def test_batched_outputs_are_the_serial_ones(case):
@@ -56,15 +59,20 @@ def test_batched_outputs_are_the_serial_ones(case):
     Y = y0 + 1e-4 * np.abs(y0) * rng.standard_normal((len(t), len(y0)))
     Y[2] = np.nan  # a member that stopped
     measures = case.measurements(d)
-    U, Ym = ctl.batch_outputs(d, S, setup.disturbance, t, Y, measures)
+    U, Ym, C = ctl.batch_outputs(d, S, setup.disturbance, t, Y, measures)
     n = len(d.x)
     for i in (0, 1, 3):
         base = setup.disturbance(t[i], d.u)
-        u, _ = ctl.apply(S, Y[i, :n], Y[i, n:], base, d.pp, t[i])
+        signals: dict = {}
+        u, _ = ctl.apply(S, Y[i, :n], Y[i, n:], base, d.pp, t[i], signals)
+        serial = ctl.percent_signals(S, {k: np.atleast_1d(v) for k, v in signals.items()})
+        assert list(C) == list(serial)
+        for k, v in serial.items():
+            np.testing.assert_allclose(C[k][i], v[0], rtol=1e-10, atol=1e-12, err_msg=k)
         values = ctl.input_values(u)
         for k, v in values.items():
             np.testing.assert_allclose(U[k][i], v, rtol=1e-12, atol=1e-12, err_msg=k)
         for k, f in measures.items():
             np.testing.assert_allclose(Ym[k][i], f(Y[i, :n], u, d.pp), rtol=1e-10,
                                        atol=1e-12, err_msg=k)
-    assert all(np.isnan(v[2]) for v in (*U.values(), *Ym.values()))
+    assert all(np.isnan(v[2]) for v in (*U.values(), *Ym.values(), *C.values()))

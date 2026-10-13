@@ -165,32 +165,36 @@ def overhead_temperature(plant: Plant, x, u) -> float:
 # the measurement, negative where raising the manipulated variable lowers the measurement;
 # integral times in minutes.  The starting point was the HYSYS case's own tuning, in
 # percent of its ranges (README, Control structures), converted to these units.
+# `pv_range` is the HYSYS controller's PV span [H], in the units of the measure; a level
+# is in percent of its vessel by construction, and the methane in the NGL in mol %, where
+# HYSYS spans 0 to 1 as a fraction.  The output spans are lo and hi.
 TUNING = {
-    # TIC-100: E-101 duty, kW per K.  [H] 1.5 %/%, PV -50 to 0 C, OP 0 to 5556 kW, 300 s
-    "TK-100 temperature": dict(Kc=-167.0, tau_I=5.0, lo=0.0, hi=5556.0),
+    # TIC-100: E-101 duty, kW per K.  [H] 1.5 %/%, OP 0 to 5556 kW, 300 s
+    "TK-100 temperature": dict(Kc=-167.0, tau_I=5.0, lo=0.0, hi=5556.0,
+                               pv_range=(-50.0, 0.0)),
     # LIC-100: TK-100 liquid valve per % level.  [H] 1.7 %/%, 480 s
-    "TK-100 level": dict(Kc=-0.017, tau_I=8.0, lo=0.0, hi=1.0),
+    "TK-100 level": dict(Kc=-0.017, tau_I=8.0, lo=0.0, hi=1.0, pv_range=(0.0, 100.0)),
     # LIC-101 under conventional (Fig. 4): TK-101 liquid valve per % level
-    "TK-101 level": dict(Kc=-0.017, tau_I=8.0, lo=0.0, hi=1.0),
+    "TK-101 level": dict(Kc=-0.017, tau_I=8.0, lo=0.0, hi=1.0, pv_range=(0.0, 100.0)),
     # LIC-102 under conventional, LIC-101 under gsp and crr: NGL valve per % level.
     # [H] 1.7 %/%, 480 s
-    "reboiler level": dict(Kc=-0.017, tau_I=8.0, lo=0.0, hi=1.0),
-    # PIC-100: K-101 power, kW per kPa.  [H] 1.5 %/%, PV 500 to 4000 kPa, OP 0 to
-    # 11944 kW, 240 s
-    "overhead pressure": dict(Kc=-5.12, tau_I=4.0, lo=0.0, hi=11944.0),
-    # XIC-100: E-103 duty, kW per mol % methane.  [H] 1.0 %/%, PV 0 to 1, OP 0 to
-    # 2722 kW, 120 s
-    "methane in NGL": dict(Kc=-27.2, tau_I=2.0, lo=0.0, hi=2722.0),
-    # RFIC-100, crr: K-102 power, kW per unit recycle ratio.  [H] 0.5 %/%, PV 0 to 1, OP
-    # 0 to 50 kW, 30 s
-    "recycle ratio": dict(Kc=25.0, tau_I=0.5, lo=0.0, hi=50.0),
+    "reboiler level": dict(Kc=-0.017, tau_I=8.0, lo=0.0, hi=1.0, pv_range=(0.0, 100.0)),
+    # PIC-100: K-101 power, kW per kPa.  [H] 1.5 %/%, OP 0 to 11944 kW, 240 s
+    "overhead pressure": dict(Kc=-5.12, tau_I=4.0, lo=0.0, hi=11944.0,
+                              pv_range=(500.0, 4000.0)),
+    # XIC-100: E-103 duty, kW per mol % methane.  [H] 1.0 %/%, OP 0 to 2722 kW, 120 s
+    "methane in NGL": dict(Kc=-27.2, tau_I=2.0, lo=0.0, hi=2722.0, pv_range=(0.0, 100.0)),
+    # RFIC-100, crr: K-102 power, kW per unit recycle ratio.  [H] 0.5 %/%, OP 0 to 50 kW,
+    # 30 s
+    "recycle ratio": dict(Kc=25.0, tau_I=0.5, lo=0.0, hi=50.0, pv_range=(0.0, 1.0)),
 }
 # ERIC-100, the recovery cascade's primary: on the TK-100 temperature set-point, K per
-# unit recovery, or on the expander-to-branch ratio R, per unit recovery.
-RECOVERY_ON_TEMPERATURE = dict(Kc=-5.0, tau_I=3.0, lo=-60.0, hi=-20.0)
+# unit recovery, or on the expander-to-branch ratio R, per unit recovery.  The recovery's
+# span is the whole of a fraction [choice]; the HYSYS case has no ERIC-100.
+RECOVERY_ON_TEMPERATURE = dict(Kc=-5.0, tau_I=3.0, lo=-60.0, hi=-20.0, pv_range=(0.0, 1.0))
 # A larger R sends less of the TK-100 vapor to the branch and raises the recovery: at a
 # fixed TK-100 temperature, 0.0064 for R 5 % above its design value, gsp and crr alike.
-RECOVERY_ON_RATIO = dict(Kc=1.0, tau_I=3.0, lo=0.5, hi=4.0)
+RECOVERY_ON_RATIO = dict(Kc=1.0, tau_I=3.0, lo=0.5, hi=4.0, pv_range=(0.0, 1.0))
 
 
 def _loop(m: dict, name: str, mv: str, tuning: dict) -> ctl.Loop:

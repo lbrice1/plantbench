@@ -36,6 +36,7 @@ traj.x                  # states, (n_states, n_times)
 traj.state("T")         # one state by name
 traj.u["Fj"]            # every input, and derived signals such as `reactor_separator_recycle`'s recycle
 traj.y["T"]             # the case's named measurements
+traj.c["reactor T.SP"]  # each loop's set-point, measurement and output (Controller signals)
 traj.wall_time, traj.nfev
 traj.window(300.0, 600.0)
 traj.to_npz("run.npz")
@@ -54,7 +55,7 @@ A configuration has these sections; every one except the structure may be omitte
 | `params` | parameter overrides by dotted path | `{"reactor.U": 300.0}` |
 | `setpoints` | loop name to set-point | `{"reactor T": 365.0}` |
 | `setpoint_steps` | loop name to (time, change) pairs | `{"reactor T": [(30.0, 1.0)]}` |
-| `tuning` | loop name to Kc, tau_I, lo, hi | `{"reactor T": {"Kc": -0.5}}` |
+| `tuning` | loop name to Kc, tau_I, lo, hi, tau_D, alpha | `{"reactor T": {"Kc": -0.5}}` |
 | `instruments` | loop name to `Instrument` arguments | `{"reactor C_A": {"deadtime": 5.0}}` |
 | `actuators` | loop name to `Actuator` arguments | `{"reactor T": {"tau": 0.5}}` |
 | `disturbance` | a named disturbance and its arguments, or a list of them | `{"name": "throughput", "fraction": 0.1}` |
@@ -73,6 +74,18 @@ config = case.config("temperature PI",
 
 The same operations are available on a structure directly: `control.with_setpoints`, `with_setpoint_steps`, `with_tuning` and `with_instruments`.
 
+Every loop is PI unless it is given a derivative time. With `tau_D` above zero, in minutes, a loop is PID in the ideal (ISA standard) form, with `Kc` multiplying every term and the derivative acting on the measurement through a first-order filter of time constant `alpha * tau_D` (`alpha` 0.1 by default):
+
+$$
+\mathrm{OP} = \mathrm{bias} + K_c\left(e + \frac{1}{\tau_I}\int e\,dt - \tau_D \frac{dz}{dt}\right), \qquad \alpha\tau_D \frac{dz}{dt} = \mathrm{PV} - z .
+$$
+
+The derivative acts on the measurement rather than the error, so a set-point step moves the output by the proportional term alone. The filter state `z` is one more augmented state, which starts at the measurement, so a run starts at rest. No case tunes a loop with derivative action, and a loop without it adds no state, so every reference result is unchanged.
+
+```python
+config = case.config("temperature PI", tuning={"reactor T": {"tau_D": 2.0}})
+```
+
 ## Non-idealities
 
 An `Instrument` adds a first-order sensor lag (`tau`) and a deadtime (`deadtime`), represented by a Padé approximation of order 1 or 2 or by a chain of `order` lags (`method="lags"`). An `Actuator` adds a first-order valve travel (`tau`) and a slew limit (`rate_limit`). Noise, bias, quantization, stiction and deadband are declared and raise, for the reasons given in `plantbench/core/instruments.py`.
@@ -84,6 +97,21 @@ config = pb.load_case("reactor_separator_recycle").config(
 ```
 
 An unconfigured element adds no states, so a configuration without non-idealities reproduces the reference results exactly.
+
+## Controller signals
+
+A run records the signals of each loop in `traj.c`, under the loop's name:
+
+| Key | Signal |
+|---|---|
+| `<loop>.SP` | the set-point in force, after any set-point step and any primary's write |
+| `<loop>.PV` | the measurement the controller sees, after its instrument |
+| `<loop>.OP` | the output it commands, before its actuator; a primary's is its secondary's set-point |
+| `<loop>.PV%`, `<loop>.OP%` | the same in percent of span, where the loop declares one |
+
+A ratio station records `<station>.OP` only. The true measurement is in `traj.y`, and the input the plant receives, after the actuator, in `traj.u`. Where the HYSYS tags and these signals differ in name, the loop is named after its measurement: TIC-100 of the deethanizer is `stage 28 temperature`.
+
+The span of a measurement is the loop's `pv_range`, (PV_min, PV_max) in its units, and the span of an output is (`lo`, `hi`). The NGL cases take theirs from the HYSYS controllers, and the reactor cases declare spans of their own choosing, marked as such in their definitions. A span only scales the recorded signals: the measurement is not clamped to it. `control.percent_gain(loop)` gives the gain in percent of output span per percent of measurement span, the form HYSYS states a tuning in, negative for a direct-acting loop.
 
 ## Disturbances
 

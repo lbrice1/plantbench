@@ -179,6 +179,7 @@ def feed_temperature_loop(integ: IntegratedDesign) -> Loop:
         tau_I=2.0,
         lo=lo,
         hi=hi,
+        pv_range=sc.PV_RANGES["feed T"],
     )
 
 

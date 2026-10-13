@@ -80,6 +80,21 @@ def test_a_value_missing_from_one_recording_is_a_difference(tmp_path):
     assert datasets._trajectory_difference(a, b, run_id, datasets.TOL) is not None
 
 
+def test_a_recording_without_controller_signals_is_named_as_such(tmp_path):
+    """A run written before the signals were recorded, against one written after."""
+    a, b = _dataset(tmp_path / "a"), _dataset(tmp_path / "b")
+    run_id = next(r["run_id"] for r in datagen.load_records(b) if r["status"] == "ok")
+    path = a / "runs" / f"{run_id}.npz"
+    with np.load(path) as f:
+        arrays = {k: f[k] for k in f.files if k != "c"}
+    meta = json.loads(str(arrays["meta"]))
+    del meta["c_names"]
+    arrays["meta"] = np.array(json.dumps(meta))
+    np.savez_compressed(path, **arrays)
+    assert (datasets._trajectory_difference(a, b, run_id, datasets.TOL)
+            == "controller signals recorded only in B")
+
+
 def test_two_generations_of_one_specification_agree(tmp_path):
     report = "\n".join(datasets.compare(_dataset(tmp_path / "a"), _dataset(tmp_path / "b")))
     assert "specification: the same" in report
