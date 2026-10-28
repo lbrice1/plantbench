@@ -42,3 +42,4 @@ pb-profile-*.out
 
 # The working backlog of open items, kept locally.
 BACKLOG.md
+docs/analysis/hysys-ngl-model-differences.md
