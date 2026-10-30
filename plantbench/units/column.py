@@ -266,10 +266,12 @@ def steady_state(
 
     # A warm start from a nearby steady state is close enough for Newton on its own,
     # which matters because this solve sits inside the plantwide design loop and the
-    # integration below costs seconds rather than milliseconds.
+    # integration below costs seconds rather than milliseconds.  No steady-state balance
+    # involves the drum or base holdup, so Newton can move either to any value, a negative
+    # one included, at no cost in the residual; such a root is rejected.
     if warm and guess is not None:
         sol, _, ier, _ = fsolve(f, guess, full_output=True, xtol=1e-13)
-        if ier == 1 and np.max(np.abs(f(sol))) < 1e-8:
+        if ier == 1 and np.max(np.abs(f(sol))) < 1e-8 and _holdups_positive(sol, cp):
             return sol
 
     def settle(start):
@@ -288,6 +290,13 @@ def steady_state(
 
     sol, _, ier, _ = fsolve(f, traj.y[:, -1], full_output=True, xtol=1e-13)
     polished = np.max(np.abs(f(sol)))
-    if ier != 1 or not np.isfinite(polished) or polished > np.max(np.abs(f(traj.y[:, -1]))):
+    if (ier != 1 or not np.isfinite(polished) or polished > np.max(np.abs(f(traj.y[:, -1])))
+            or not _holdups_positive(sol, cp)):
         sol = traj.y[:, -1]  # keep the integrated result if the polish did not help
     return sol
+
+
+def _holdups_positive(z: np.ndarray, cp: ColumnParameters) -> bool:
+    """Whether every holdup of a column state, drum, trays and base, is positive."""
+    MD, _, M, _, MB, _ = unpack(z, cp)
+    return bool(MD > 0.0 and MB > 0.0 and np.all(M > 0.0))
