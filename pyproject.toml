@@ -16,8 +16,10 @@ authors = [
 ]
 requires-python = ">=3.11"
 # SciPy 1.15 is the first to take `rng` in its quasi-Monte Carlo engines, which the
-# Latin hypercube of a specification uses.
-dependencies = ["numpy>=2.0", "scipy>=1.15"]
+# Latin hypercube of a specification uses.  In 1.17 and 1.18 LSODA keeps its work arrays
+# after every solve (scipy/scipy#26373); a process that integrates many runs then grows
+# without bound.  tests/core/test_lsoda.py fails on a release with the leak.
+dependencies = ["numpy>=2.0", "scipy>=1.15,!=1.17.*,!=1.18.*"]
 
 [project.optional-dependencies]
 # The reproduction tests run the scripts of studies/reactor_separator_recycle, which draw figures.
@@ -57,7 +59,8 @@ platforms = [{ name = "osx-arm64-macos14", platform = "osx-arm64", macos = "14.0
 [tool.pixi.dependencies]
 python = ">=3.11"
 numpy = ">=2.0"
-scipy = ">=1.15"
+# As in `dependencies`: not 1.17 or 1.18, whose LSODA leaks.
+scipy = ">=1.15,!=1.17.*,!=1.18.*"
 
 [tool.pixi.pypi-dependencies]
 plantbench = { path = ".", editable = true }

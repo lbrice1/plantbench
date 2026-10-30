@@ -82,7 +82,7 @@ python3 -m venv .venv
 
 The commands below are written for the pip environment. With uv, replace `.venv/bin/` with `uv run `; with pixi, with `pixi run ` (`pixi run -e study ` for the studies). `python -m plantbench` is equivalent to `plantbench`.
 
-The reference results were produced with Python 3.14.7, NumPy 2.5.3, SciPy 1.18.1, scikit-learn 1.9.1, PaCMAP 0.9.1 and HDBSCAN 0.8.44 on macOS (arm64).
+The reference results were produced with Python 3.14.7, NumPy 2.5.3, SciPy 1.18.1, scikit-learn 1.9.1, PaCMAP 0.9.1 and HDBSCAN 0.8.44 on macOS (arm64). SciPy 1.17 and 1.18 are excluded because their LSODA keeps its work arrays after every solve. With SciPy 1.16.3, the release the lockfiles resolve to, the golden tests reproduce the reference results.
 
 ## Tests
 
