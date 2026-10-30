@@ -146,6 +146,22 @@ def test_a_design_that_does_not_solve_is_recorded_not_raised(tmp_path):
     assert r["status"] == "failed" and "did not converge" in r["message"]
 
 
+def test_a_design_whose_column_settle_runs_out_is_recorded_as_failed(tmp_path, monkeypatch):
+    """The plantwide design of `reactor_separator_recycle` settles its column inside the
+    residual; a settle that exhausts its evaluations ends the run as a failed design."""
+    from plantbench.units import column
+
+    monkeypatch.setattr(column, "MAX_SETTLE_EVALUATIONS", 100)
+    # A boil-up no other test designs at, so that no cached design answers instead.
+    r = datagen.run_one("reactor_separator_recycle", {"structure": "effluent fixed",
+                                                      "options": {"V_boil": 27.75}},
+                        {"t_end": 10.0, "dt": 5.0, "wall_budget": None, "features": []},
+                        str(tmp_path))
+    assert r["status"] == "failed"
+    assert r["message"].startswith("design: SettleLimitExceeded: ")
+    assert "the limit being 100" in r["message"]
+
+
 def test_a_sequential_design_can_add_batches_to_one_dataset(tmp_path):
     """The unit of work is a list of configurations, however it was chosen."""
     out = tmp_path / "d"

@@ -65,6 +65,14 @@ def test_a_root_with_a_negative_holdup_is_never_returned(monkeypatch):
     assert MD > 0 and MB > 0 and np.all(M > 0)
 
 
+def test_a_settle_stops_at_its_evaluation_limit():
+    cp = PlantParameters().column
+    F, zF, q, V, Lr = 18.0, np.array([0.10, 0.42, 0.48]), 1.0, 28.0, 18.5
+    with pytest.raises(col.SettleLimitExceeded, match="after 1[0-9]{2} right-hand-side "
+                                                      "evaluations, the limit being 100"):
+        col.steady_state(cp, F, zF, q, V, Lr, max_evaluations=100)
+
+
 # -- the plantwide design -------------------------------------------------------
 
 
