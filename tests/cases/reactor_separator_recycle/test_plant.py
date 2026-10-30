@@ -2,6 +2,7 @@
 
 import numpy as np
 import pytest
+import scipy.optimize
 
 from plantbench.cases.reactor_separator_recycle import measurements as meas
 from plantbench.cases.reactor_separator_recycle import plant
@@ -45,6 +46,23 @@ def test_internal_liquid_steps_up_below_the_feed():
     L = col.weir_flow(M, cp)
     assert L[0] == pytest.approx(Lr, rel=1e-6)
     assert L[-1] == pytest.approx(Lr + q * F, rel=1e-6)
+
+
+def test_a_root_with_a_negative_holdup_is_never_returned(monkeypatch):
+    """No steady-state balance involves the drum or base holdup, so Newton can move either
+    to a negative value at no cost in the residual.  A warm start in the plantwide design
+    did so with some of OpenBLAS's x86 kernels, the base reaching -7.4e7 kmol."""
+    cp = PlantParameters().column
+    F, zF, q, V, Lr = 18.0, np.array([0.10, 0.42, 0.48]), 1.0, 28.0, 18.5
+    z = col.steady_state(cp, F, zF, q, V, Lr)
+    _, xD, M, x, _, xB = col.unpack(z, cp)
+    root = col.pack(-455.0, xD, M, x, -7.4e7, xB)
+    D, Bm = col.product_flows(cp, F, q, V, Lr)
+    assert np.max(np.abs(col.rhs(root, cp, F, zF, q, V, Lr, D, Bm))) < 1e-10
+    # Every Newton solve, the warm start and the polish after the settle, finds that root.
+    monkeypatch.setattr(scipy.optimize, "fsolve", lambda f, x0, **kw: (root, {}, 1, ""))
+    MD, _, M, _, MB, _ = col.unpack(col.steady_state(cp, F, zF, q, V, Lr, guess=z, warm=True), cp)
+    assert MD > 0 and MB > 0 and np.all(M > 0)
 
 
 # -- the plantwide design -------------------------------------------------------
