@@ -1,7 +1,21 @@
 THE CLOSED-LOOP SPECTRA OF THE CONTROL STRUCTURES
-analyzed at b6bdd67 dirty with plantbench 0.2.1, Python 3.14.7, NumPy 2.5.3, SciPy 1.18.1, scikit-learn 1.9.1, pacmap 0.9.1, hdbscan 0.8.44
+analyzed at ec7405e clean with plantbench 0.3.0, Python 3.14.7, NumPy 2.5.3, SciPy 1.16.3, scikit-learn 1.9.1, pacmap 0.9.1, hdbscan 0.8.44
 
 structure              damping   rightmost  slowest, min     s
-open loop                0.512   1.339e-15           inf     8
+open loop                0.512   1.339e-15           inf     9
 basic                    0.445  -8.102e-02          12.3     4
 composition cascade      0.427  -6.478e-02          15.4     4
+
+OTHER GAINS OF TIC-101 AND XIC-100
+case tuning: TIC-101 -0.25 kmol/min per K, 0.2308 of the converted -1.0833; XIC-100 -250.0 K, 0.0862 of the converted -2900.0
+gains as fractions of the converted gain; least damped mode in rad/min
+
+structure                TIC-101   XIC-100  damping     least damped mode  slowest, min
+basic                  converted         -    0.234       -0.486 ± 2.013j           5.5
+basic                     0.2500         -    0.436       -0.866 ± 1.785j          11.8
+basic                     0.1500         -    0.448       -0.063 ± 0.126j          15.9
+basic                     0.1000         -    0.438       -0.051 ± 0.105j          19.6
+basic                     0.0500         -    0.460       -0.039 ± 0.075j          25.8
+composition cascade    converted converted    0.206       -0.442 ± 2.096j           5.1
+composition cascade         case converted    0.397       -2.803 ± 6.471j          11.1
+composition cascade         case    0.0833    0.428       -1.747 ± 3.692j          15.8

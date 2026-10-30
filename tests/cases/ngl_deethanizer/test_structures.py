@@ -46,3 +46,20 @@ def test_damping_ratio(structure):
     assert ctl.damping_ratio(ev) == pytest.approx(DAMPING[structure], abs=1e-3)
     if structure != "open loop":
         assert ev.real.max() < 0
+
+
+# The HYSYS tuning converted, and the case's TIC-101 with the converted XIC-100: the
+# damping ratios the case card quotes, from the second table of `tuning.txt`.
+TIC101 = {"stage 4 temperature": dict(Kc=-13.0 * (1000.0 / 60) / 200.0, tau_I=210.0 / 60)}
+XIC100 = {"ethane in LPG": dict(Kc=-20.0 * 145.0, tau_I=66.0 / 60)}
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("structure, tuning, zeta", [
+    ("basic", TIC101, 0.234),
+    ("composition cascade", {**TIC101, **XIC100}, 0.206),
+    ("composition cascade", XIC100, 0.397),
+], ids=["basic converted", "cascade converted", "cascade, XIC-100 converted"])
+def test_damping_ratio_of_the_converted_hysys_tuning(structure, tuning, zeta):
+    ev = pb.build(CASE, CASE.config(structure=structure, tuning=tuning)).spectrum()
+    assert ctl.damping_ratio(ev) == pytest.approx(zeta, abs=1e-3)
