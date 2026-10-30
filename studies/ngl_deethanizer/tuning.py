@@ -59,9 +59,10 @@ def _label(gain) -> str:
     return "case" if gain is None else gain if isinstance(gain, str) else f"{gain:.4f}"
 
 
-def least_damped(ev: np.ndarray) -> complex:
-    """The oscillatory eigenvalue of the smallest damping ratio, as `damping_ratio` finds it."""
-    osc = ev[np.abs(ev.imag) > 1e-9]
+def least_damped(ev: np.ndarray, min_frequency: float = 0.05) -> complex:
+    """The oscillatory eigenvalue of the smallest damping ratio, by the rule of
+    `control.damping_ratio`, whose default `min_frequency` this repeats."""
+    osc = ev[np.abs(ev.imag) > min_frequency]
     return complex(osc[np.argmin(-osc.real / np.abs(osc))])
 
 
