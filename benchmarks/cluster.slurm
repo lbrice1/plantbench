@@ -1,23 +1,28 @@
 #!/bin/bash
-# The GPU tests and the benchmarks on one Della GPU (A100 40 GB, not MIG).
+# The GPU tests and the benchmarks on one GPU of a Slurm cluster.
 #
-#   cd <repository>; pixi install -e cuda      # on the login node: compute nodes are offline
-#   sbatch benchmarks/della.slurm
+#   cd <repository>; pixi install -e cuda      # on the login node: compute nodes may be offline
+#   sbatch --account=<account> --constraint=<feature> benchmarks/cluster.slurm
 #
-# One hour or less runs under the gpu-test QOS.  The job is single-threaded on the host,
-# hence one core.
+# The account and the GPU depend on the cluster; the script names neither.  Both come from
+# the command line, or from SBATCH_ACCOUNT and SBATCH_CONSTRAINT in the environment.  The
+# constraint selects the GPU by node feature, for instance a 40 GB A100 that is not
+# partitioned into MIG slices; without it the job takes any GPU.  `sinfo -o "%P %f %D %t"`
+# lists the partitions, the features of their nodes and the nodes' state.  The job is
+# single-threaded on the host, hence one core, and takes less than an hour.
 #SBATCH --job-name=pb-bench
-#SBATCH --account=rse
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=8G
 #SBATCH --gres=gpu:1
-#SBATCH --constraint=nomig&gpu40
 #SBATCH --time=01:00:00
 #SBATCH --output=pb-bench-%j.out
 set -euo pipefail
 cd "$SLURM_SUBMIT_DIR"
+# pixi's cache on node-local disk: the environment was installed on the login node, and a
+# cache on the network file system draws a warning on every call.
+export PIXI_CACHE_DIR=/tmp/pixi-cache-$USER
 git log --oneline -1
 nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv
 run() { pixi run --frozen -e cuda "$@"; }
