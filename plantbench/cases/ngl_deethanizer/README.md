@@ -29,7 +29,7 @@ In `parameters.py`, each constant carries its source: `[H]` for the HYSYS case, 
 | Product valves | Rigorous Fisher valves, Cv 18 and 29 | Linear in opening, sized to the HYSYS design openings, 44.56 % and 40.63 % | The let-down pressures, 2010 and 1790 kPa, are far enough below the column that its pressure barely moves the flows |
 | Equation of state | HYSYS Peng–Robinson | Peng–Robinson with the ChemSep binary interaction parameters, in NumPy (`plantbench.units.peng_robinson`) | The same equation; the interaction parameters and ideal-gas heat capacities differ, and with them the duties (Reference results) |
 | Design | The dynamic case's state | The steady state at the HYSYS set-points | The design has to be a steady state |
-| Tuning | The HYSYS tuning | Converted from it, with TIC-101 and XIC-100 detuned for damping (Control structures) | The HYSYS tuning damps the closed loop at 0.235 |
+| Tuning | The HYSYS tuning | Converted from it, with TIC-101 and XIC-100 detuned for damping (Control structures) | The HYSYS tuning damps the closed loop at 0.234 |
 
 ## Process
 
@@ -104,12 +104,12 @@ A negative gain means that raising the manipulated variable lowers the measureme
 | TIC-100 | reverse | −5 to 140 °C | 0 to 5556 kW | 10.5 | 88 |
 | XIC-100 | direct | 0 to 1 | −5 to 140 °C | 20 | 66 |
 
-Converted unchanged, the tuning is stable but damps `basic` at 0.235 and `composition cascade` at 0.206. Two loops are detuned to remedy this:
+Converted unchanged, the tuning is stable but damps `basic` at 0.234 and `composition cascade` at 0.206. Two loops are detuned to remedy this:
 
-- **TIC-101.** The poorly damped mode, 2 rad/min, is the stage 4 temperature loop. A quarter of the converted gain damps it at 0.445.
-- **XIC-100.** Its proportional action passes through that of TIC-100 to the reboiler duty. A twelfth of the converted gain, with a 5 min integral time, damps the cascade at 0.427.
+- **TIC-101.** The poorly damped mode, at 2 rad/min, is the stage 4 temperature loop. A gain of −0.25 kmol/min per K, 0.23 of the converted gain, damps `basic` at 0.445.
+- **XIC-100.** Its proportional action passes through that of TIC-100 to the reboiler duty. A gain of −250 K per unit mole fraction, 0.086 of the converted gain, with a 5 min integral time, damps the cascade at 0.427.
 
-The ceiling is set by the column itself. The open loop's least damped mode is 0.512, and with TIC-101 detuned further the limiting mode becomes one near it.
+Detuning TIC-101 further gains little damping. At 0.15, 0.10 and 0.05 of the converted gain, the least damped mode is a slow one near 0.1 rad/min, damped at 0.448, 0.438 and 0.460. The slowest mode lengthens meanwhile from 12.3 min to 15.9, 19.6 and 25.8 min. The open loop's least damped mode is 0.512.
 
 The damping ratio of each structure is the smallest among the oscillatory modes of the closed loop linearized at the design point, from `studies/ngl_deethanizer/tuning.py`. The slowest mode is −1/Re λ of the rightmost eigenvalue λ. The open loop has the integrating modes of the two levels and the pressure.
 
