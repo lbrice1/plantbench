@@ -22,7 +22,7 @@ TANK_MODULE = """\
 import dataclasses
 
 import plantbench as pb
-from plantbench.cases._template.definition import CASE as _TANK
+from plantbench.cases.template import CASE as _TANK
 
 
 def make_design(config):
@@ -109,7 +109,7 @@ def test_the_decorator_builds_the_case_on_first_use(session):
     def lazy_tank():
         import dataclasses
 
-        from plantbench.cases._template.definition import CASE
+        from plantbench.cases.template import CASE
         calls.append(1)
         return dataclasses.replace(CASE, id="lazy_tank")
 
@@ -122,7 +122,7 @@ def test_the_decorator_builds_the_case_on_first_use(session):
 def test_the_decorator_refuses_a_case_of_another_id(session):
     @pb.case("named_tank")
     def named_tank():
-        from plantbench.cases._template.definition import CASE
+        from plantbench.cases.template import CASE
         return CASE
 
     with pytest.raises(ValueError, match="its id is 'template'"):
@@ -187,7 +187,7 @@ def test_a_built_in_case_records_no_case_source(tmp_path):
 def test_an_interactive_case_is_refused_before_workers_start(session, monkeypatch):
     import dataclasses
 
-    from plantbench.cases._template.definition import CASE
+    from plantbench.cases.template import CASE
     pb.register(dataclasses.replace(CASE, id="typed_tank"))
     cases._SESSION["typed_tank"].module = "__main__"
     monkeypatch.delattr(sys.modules["__main__"], "__file__", raising=False)
