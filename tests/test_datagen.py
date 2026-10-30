@@ -225,39 +225,6 @@ def test_a_second_generation_into_the_same_directory_is_refused(tmp_path):
             datagen.run_configurations("jacketed_cstr", [{}], out, log=_quiet)
 
 
-def test_provenance_is_recorded_only_from_a_checkout_of_this_repository(tmp_path, monkeypatch):
-    """An environment inside some other repository must not record that repository's commit."""
-    import subprocess
-    other = tmp_path / "other"
-    other.mkdir()
-    subprocess.run(["git", "init", "-q", str(other)], check=True)
-    monkeypatch.setattr(datagen, "_SOURCE", other)
-    assert datagen.repo_state() == {"git_commit": None, "git_dirty": None}
-
-
-def test_only_the_code_can_make_a_checkout_dirty(tmp_path, monkeypatch):
-    """A results file an analysis writes, or a manuscript being edited, is not code."""
-    import subprocess
-
-    def git(*args):
-        subprocess.run(["git", "-C", str(tmp_path), *args], check=True, capture_output=True)
-
-    for path in ("pyproject.toml", "plantbench/x.py", "studies/s/a.py",
-                 "studies/s/results/r.txt", "studies/s/figures/f.png", "manuscript/m.tex"):
-        (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / path).write_text("0\n")
-    git("init", "-q")
-    git("add", ".")
-    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "c")
-    monkeypatch.setattr(datagen, "_SOURCE", tmp_path.resolve())
-    assert datagen.repo_state()["git_dirty"] is False
-    for path in ("studies/s/results/r.txt", "studies/s/figures/f.png", "manuscript/m.tex"):
-        (tmp_path / path).write_text("1\n")
-    assert datagen.repo_state()["git_dirty"] is False
-    (tmp_path / "studies/s/a.py").write_text("1\n")
-    assert datagen.repo_state()["git_dirty"] is True
-
-
 # -- features a case supplies itself -----------------------------------------------------
 
 CASE0_SPEC = {

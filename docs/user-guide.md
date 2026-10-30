@@ -231,6 +231,8 @@ Generation resumes where it stopped. Runs already recorded are skipped, includin
 
 The commit is recorded only when the library runs from a checkout of its repository; an installed copy records none. The dirty flag looks at the code alone, `plantbench/` and `studies/` without their results and figures, so an edited manuscript or a results file an analysis has just written does not mark a dataset or a result dirty. A dataset built by `run_configurations` from a list of configurations writes a manifest of the same kind, with no specification; a directory of runs with no manifest at all is listed by `plantbench datasets` with its provenance unknown.
 
+`plantbench.provenance()` returns the manifest's record of the library and its environment, the version, commit, dirty flag, package versions, platform and time, for a program that produces results outside `datagen`, such as a training run. Given the id of a case that is not built in, it adds where that case comes from, as `case_source`.
+
 ## Reading a dataset
 
 ```python

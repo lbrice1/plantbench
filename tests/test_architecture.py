@@ -16,7 +16,8 @@ import pytest
 PACKAGE = pathlib.Path(__file__).resolve().parents[1] / "plantbench"
 
 # The modules above the cases: they use the layers, and no layer uses them.
-TOP = {"datagen", "datasets", "report", "task", "sensitivity", "contract", "scaffold"}
+TOP = {"datagen", "datasets", "report", "task", "sensitivity", "contract", "scaffold",
+       "_provenance"}
 
 # What each layer may import from inside plantbench, besides itself.  `backend`, the
 # array module a batched evaluation runs on (NumPy or CuPy), is beneath all of them and

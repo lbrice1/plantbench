@@ -34,23 +34,23 @@ import hashlib
 import importlib
 import json
 import os
-import platform
 import shutil
 import signal
-import subprocess
 import sys
 import threading
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import replace
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
 import numpy as np
 
 from plantbench import cases
+
+# `repo_state` and `case_source` were defined here before `provenance` was public.
+from plantbench._provenance import case_source, provenance, repo_state  # noqa: F401
 from plantbench.cases import load_case
 from plantbench.core import control as ctl
 from plantbench.core.case import Config, Trajectory, build_on, design_key, features_of, run_setups
@@ -177,84 +177,9 @@ def _run_ensembles(case_id: str, configs: list[dict], run: dict, runs_dir: str,
                 yield record
 
 
-# The checkout the package runs from, when it runs from one: the directory above it.
-_SOURCE = Path(__file__).resolve().parent.parent
-# What decides a result: the library and the studies, not their outputs.  A manuscript
-# being edited, or a results file an analysis has just written, leaves the code clean.
-_CODE = ("plantbench", "studies", ":(exclude,glob)studies/*/results/**",
-         ":(exclude,glob)studies/*/figures/**")
-
-
-def _git(*args: str, cwd: Path | None = None) -> str | None:
-    try:
-        out = subprocess.run(["git", *args], cwd=cwd or _SOURCE,
-                             capture_output=True, text=True, timeout=10, check=True)
-        return out.stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        return None
-
-
-def repo_state() -> dict:
-    """The commit of the checkout the package runs from, and whether its code is uncommitted.
-
-    Only a checkout of this repository has a commit to record.  An installed copy has
-    none, and the repository that happens to enclose an environment is not the one that
-    produced the code, so both record None rather than a commit that would mislead.
-    """
-    top = _git("rev-parse", "--show-toplevel")
-    if top is None or Path(top).resolve() != _SOURCE or not (_SOURCE / "pyproject.toml").exists():
-        return {"git_commit": None, "git_dirty": None}
-    status = _git("status", "--porcelain", "--", *_CODE)
-    return {"git_commit": _git("rev-parse", "HEAD"),
-            "git_dirty": None if status is None else bool(status)}
-
-
-def case_source(case_id: str) -> dict | None:
-    """Where a case that is not built in comes from, for the manifest: its module, its
-    distribution and version when installed, and the commit of its checkout.
-
-    The commit is that of the repository holding the case's module, unless the module is
-    an installed copy under site-packages, where the enclosing repository, if any, is not
-    the one that produced it.  None for a built-in case, which `repo_state` covers.
-    """
-    src = cases.source(case_id)
-    if src["kind"] == "built in":
-        return None
-    out = dict(src)
-    module = sys.modules.get(src["module"]) or importlib.import_module(src["module"])
-    path = getattr(module, "__file__", None)
-    if src["module"] in ("__main__", "__mp_main__") and path is not None:
-        out["file"] = str(Path(path).resolve())
-    out.update(git_commit=None, git_dirty=None)
-    if path is not None and "site-packages" not in Path(path).parts:
-        where = Path(path).resolve().parent
-        commit = _git("rev-parse", "HEAD", cwd=where)
-        if commit is not None:
-            status = _git("status", "--porcelain", "--", ".", cwd=where)
-            out.update(git_commit=commit, git_dirty=None if status is None else bool(status))
-    return out
-
-
-def _environment() -> dict:
-    import scipy
-
-    from plantbench import __version__
-    return {
-        "plantbench": __version__, **repo_state(),
-        "python": sys.version.split()[0], "numpy": np.__version__, "scipy": scipy.__version__,
-        "platform": platform.platform(),
-        "started": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-    }
-
-
-def _case_entry(case_id: str) -> dict:
-    source = case_source(case_id)
-    return {} if source is None else {"case_source": source}
-
-
 def _manifest(spec: Spec) -> dict:
     return {
-        "study": spec.name, "case": spec.case, **_case_entry(spec.case), **_environment(),
+        "study": spec.name, "case": spec.case, **provenance(spec.case),
         "spec_fingerprint": spec.fingerprint(),
         # Only when the specification carries a task; a dataset of runs alone has none.
         **({"protocol_fingerprint": spec.protocol()} if spec.task else {}),
@@ -263,7 +188,7 @@ def _manifest(spec: Spec) -> dict:
 
 def _configurations_manifest(out: Path, case_id: str, recorded: int) -> dict:
     """The manifest of a dataset built from configurations rather than a specification."""
-    manifest = {"study": out.name, "case": case_id, **_case_entry(case_id), **_environment(),
+    manifest = {"study": out.name, "case": case_id, **provenance(case_id),
                 "spec_fingerprint": None}
     if recorded:
         # Runs made before the dataset described itself: their provenance is not known.
