@@ -301,7 +301,7 @@ def build_on(case: Case, design, config: Config) -> Setup:
             raise TypeError(f"{type(plant).__name__} is not a dataclass, so its inputs "
                             "cannot be held at other values")
         plant = replace(plant, u=replace(plant.u, **moved))
-    _check_hold_undisturbed(disturbance, plant.u, config.hold)
+    _check_undisturbed(disturbance, plant.u, config.hold, "held")
     return Setup(case, config, plant, structure, disturbance,
                  nominal=None if plant is design else design,
                  x0=_start(case, design, config.x0), held=held)
@@ -311,12 +311,7 @@ def _hold(design, structure: ctl.Structure, config: Config):
     """The structure without the elements that write a held input, and those elements.
     Raises on an input the design does not have or that is not a scalar, and on another
     section of the configuration that names a removed loop."""
-    for name in config.hold:
-        if not hasattr(design.u, name):
-            raise KeyError(f"cannot hold {name!r}: the inputs are "
-                           f"{[f.name for f in dataclasses.fields(design.u)]}")
-        if np.ndim(getattr(design.u, name)) != 0:
-            raise TypeError(f"cannot hold {name!r}: only a scalar input can be held")
+    _check_inputs(design.u, config.hold, "hold", "held")
     structure, held = ctl.without_inputs(structure, config.hold)
     names = {e.name for e in held}
     for section in ("setpoints", "setpoint_steps", "tuning", "instruments", "actuators"):
@@ -327,17 +322,28 @@ def _hold(design, structure: ctl.Structure, config: Config):
     return structure, held
 
 
-def _check_hold_undisturbed(disturbance, u0, hold: Mapping[str, float]) -> None:
-    """Raise if the disturbance changes a held input, at the start or at any of the times
-    it declares (`control.breakpoints_of`): the input would have two owners."""
-    if disturbance is None or not hold:
+def _check_inputs(u, names, verb: str, participle: str) -> None:
+    """Raise unless every name is a scalar field of the inputs `u`: what a configuration's
+    `hold` and a stepper's owned inputs may name."""
+    for name in names:
+        if not hasattr(u, name):
+            raise KeyError(f"cannot {verb} {name!r}: the inputs are "
+                           f"{[f.name for f in dataclasses.fields(u)]}")
+        if np.ndim(getattr(u, name)) != 0:
+            raise TypeError(f"cannot {verb} {name!r}: only a scalar input can be {participle}")
+
+
+def _check_undisturbed(disturbance, u0, names, participle: str) -> None:
+    """Raise if the disturbance changes one of the named inputs, at the start or at any of
+    the times it declares (`control.breakpoints_of`): the input would have two owners."""
+    if disturbance is None or not names:
         return
     for t in (0.0, *getattr(disturbance, "times", ())):
         u = disturbance(t, u0)
-        changed = sorted(k for k in hold if getattr(u, k) != getattr(u0, k))
+        changed = sorted(k for k in names if getattr(u, k) != getattr(u0, k))
         if changed:
-            raise ValueError(f"the disturbance changes the held input(s) {changed} at "
-                             f"t = {t:g}")
+            raise ValueError(f"the disturbance changes the {participle} input(s) {changed} "
+                             f"at t = {t:g}")
 
 
 def _start(case: Case, design, x0: Mapping[str, float]) -> np.ndarray:

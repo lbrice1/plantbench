@@ -16,6 +16,7 @@ from plantbench import _provenance
 from plantbench.cases import case, list_cases, load_case, register
 from plantbench.core import case as _case
 from plantbench.core.case import Case, Config, Setup, Trajectory
+from plantbench.core.stepper import Step, Stepper
 
 try:
     __version__ = version("plantbench")
@@ -63,5 +64,5 @@ def provenance(case: str | None = None) -> dict:
     return _provenance.provenance(case)
 
 
-__all__ = ["Case", "Config", "Setup", "Trajectory", "build", "case", "list_cases", "load_case",
+__all__ = ["Case", "Config", "Setup", "Step", "Stepper", "Trajectory", "build", "case", "list_cases", "load_case",
            "provenance", "register", "run", "run_ensemble", "__version__"]

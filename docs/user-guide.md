@@ -152,6 +152,23 @@ The seed is part of the configuration, so a sweep over `"disturbance.seed"` give
 
 A disturbance that changes the inputs discontinuously declares the times it does so as an attribute `times`; `step`, `ramp`, `combine` and the sequences set it. `plantbench.run` restarts the integration at those times and at every scheduled set-point change, so the solver never steps across one. A disturbance written by hand should set `times` as well. `control.simulate`, which the `reactor_separator_recycle` study scripts use, integrates in one call, as the reference results were produced.
 
+## Stepping a plant
+
+A controller outside the library, a policy that acts once per control interval, needs the plant advanced one interval at a time rather than a whole trajectory. `pb.Stepper` holds a configured plant, its time and its closed-loop state between steps:
+
+```python
+case = pb.load_case("jacketed_cstr")
+setup = pb.build(case, case.config("composition cascade", disturbance={"name": "feed_temperature", "value": 340.0}))
+stepper = pb.Stepper(setup, dt=0.5, inputs=["Fj"])   # the caller owns the coolant flow
+obs = stepper.observe()                              # t, x, u, y, c at the start
+for k in range(400):
+    obs = stepper.step({"Fj": policy(obs.y)})         # held over [t, t + 0.5]
+```
+
+The caller owns inputs, the set-points of loops, or both, and each action names exactly what is owned. An owned input is removed from the structure with every element that writes it, as a configuration's `hold` removes it: here both loops of the cascade, which `stepper.displaced` returns as `Loop` objects with their tunings. The action sets the input before the remaining loops are evaluated, so a ratio station that follows it follows the action. An owned set-point leaves its loop in place. Ownership is refused for an input the configuration holds or a disturbance changes, for the set-point of a loop that is removed or whose set-point a cascade primary writes, and for a set-point with a schedule.
+
+The action is held over the interval (zero-order hold), and the integration restarts at each breakpoint of the disturbance and the set-point schedules inside it. Each `step` returns a `Step`: the time, the plant state, the inputs, the case's measurements, the signals of the remaining loops and the right-hand-side evaluations the interval took. `step()` without an action holds the nominal one, `stepper.nominal_action()`, which leaves the plant as configured; with nothing owned, a stepped run is the run of `pb.run` to the solver's tolerance. The stepper starts where the configuration starts the run, at `setup.x0`, and `reset()` returns it there. An interval whose integration fails raises `StepFailed` and leaves the stepper where the interval began.
+
 ## Linear analysis
 
 ```python
