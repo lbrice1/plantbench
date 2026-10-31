@@ -21,6 +21,8 @@ SPEC = {
     ("tuning.reactor T.Kc", ["tuning", "reactor T", "Kc"]),
     ("params.reactor.U", ["params", "reactor.U"]),
     ("mismatch.reactor.U", ["mismatch", "reactor.U"]),
+    ("x0.T", ["x0", "T"]),
+    ("hold.Fj", ["hold", "Fj"]),
     ("instruments.reactor C_A.deadtime", ["instruments", "reactor C_A", "deadtime"]),
     ("disturbance", ["disturbance"]),
     ("options.network", ["options", "network"]),

@@ -352,3 +352,26 @@ def test_a_mismatch_sweep_is_recorded_on_one_design(tmp_path):
     assert {r["config"]["mismatch"]["k0"] for r in records} == {2.529e11, 2.248e11}
     with open(out / "index.csv") as f:
         assert "config.mismatch.k0" in next(csv.DictReader(f))
+
+
+def test_starts_and_holds_give_in_a_dataset_the_runs_of_run(tmp_path):
+    """A grid of starts, with the coolant held or not, as `datagen` sweeps it: each record's
+    trajectory is the one `run` gives for its configuration."""
+    import plantbench as pb
+    from plantbench.cases.jacketed_cstr.definition import CASE
+
+    spec = Spec.from_dict({
+        "study": {"name": "s", "case": "jacketed_cstr"},
+        "base": {"structure": "temperature PI"},
+        "variants": [{}, {"hold": {"Fj": 1.0}}],
+        "sweep": {"x0.T": [355.0, 370.0]},
+        "run": {"t_end": 30.0, "dt": 1.0},
+    })
+    out = datagen.generate(spec, tmp_path / "d", log=_quiet)
+    records = datagen.load_records(out)
+    assert [r["status"] for r in records] == ["ok"] * 4
+    for r in records:
+        stored = datagen.load_run(out, r["run_id"])
+        alone = pb.run(CASE, r["config"], t_end=30.0, dt=1.0)
+        assert np.array_equal(stored.x, alone.x)
+        assert stored.state("T")[0] == pytest.approx(r["config"]["x0"]["T"], rel=1e-12)

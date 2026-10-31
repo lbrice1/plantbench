@@ -111,9 +111,10 @@ def _factor(W, xp):
 def integrate_ensemble(design, structures: list, disturbances: list, t_end: float,
                        n_points: int = 1200, rtol: float = 1e-8, atol: float = 1e-10,
                        wall_budget: float | None = None, device: str = "cpu",
-                       max_steps: int = 100_000) -> EnsembleRun:
+                       max_steps: int = 100_000, starts: list | None = None) -> EnsembleRun:
     """Integrate the closed loops of `structures`, member i under `disturbances[i]`, from
-    the design point to `t_end`, all on the grid of `n_points` from 0 to `t_end`.
+    the design point, or from the plant state `starts[i]` where it is given, to `t_end`,
+    all on the grid of `n_points` from 0 to `t_end`.
 
     The design must declare a batched right-hand side that does not depend on t.  Every
     step of a member ends on its breakpoints (`control.breakpoints_of`) and on the output
@@ -133,8 +134,12 @@ def integrate_ensemble(design, structures: list, disturbances: list, t_end: floa
         raise ValueError("one disturbance (or None) is needed per structure")
     stacked = ctl.stack(structures, xp)
     model, pp, u0 = design.rhs, design.pp, design.u
-    Y0 = np.array([np.concatenate([design.x, ctl.initial_augmented(S, design)])
-                   for S in structures])
+    if starts is not None and len(starts) != M:
+        raise ValueError("one start (or None) is needed per structure")
+    starts = [design.x if x is None else np.asarray(x, dtype=float)
+              for x in (starts or [None] * M)]
+    Y0 = np.array([np.concatenate([x, ctl.initial_augmented(S, design, x)])
+                   for S, x in zip(structures, starts)])
     N = Y0.shape[1]
     grid = np.linspace(0.0, t_end, n_points)
     # Where each member's steps must end: its breakpoints and the grid after 0.

@@ -181,27 +181,31 @@ def n_augmented(structure: Structure) -> int:
     return state_layout(structure)[1]
 
 
-def initial_augmented(structure: Structure, design) -> np.ndarray:
-    """Augmented states that leave the closed loop at rest at the design point.
+def initial_augmented(structure: Structure, design, x: np.ndarray | None = None) -> np.ndarray:
+    """Augmented states that leave the closed loop at rest at the design point, or, given
+    a plant state `x` to start from, at rest at that state as far as it can be.
 
     Integrals start at zero, as they always have.  Instrument states are initialized so
-    that the reported measurement equals the true one, and actuator states so that the
-    valve already sits at its design position; otherwise a non-ideal structure would begin
-    every run with a transient that has nothing to do with the disturbance under study.
-    A derivative filter starts at the measurement, so the derivative term starts at zero.
+    that the reported measurement equals the true one at the start, and actuator states so
+    that the valve already sits at its design position; otherwise a non-ideal structure
+    would begin every run with a transient that has nothing to do with the disturbance
+    under study.  A derivative filter starts at the measurement, so the derivative term
+    starts at zero.  From a start other than the design point, the loops then begin with
+    an error and only their proportional action, as a controller switched on there would.
     """
     slots, n_aug = state_layout(structure)
     aug = np.zeros(n_aug)
     if n_aug == len(structure):
         return aug
+    x = design.x if x is None else x
     for k, element in enumerate(structure):
         i_slot, a_slot, f_slot = slots[k]
         inst = getattr(element, "instrument", None)
         if inst is not None and inst.n_states:
-            aug[i_slot] = inst.initial(element.measure(design.x, design.u, design.pp))
+            aug[i_slot] = inst.initial(element.measure(x, design.u, design.pp))
         if getattr(element, "n_filter_states", 0):
             # An instrument starts at rest, reporting the true value.
-            aug[f_slot] = element.measure(design.x, design.u, design.pp)
+            aug[f_slot] = element.measure(x, design.u, design.pp)
         act = getattr(element, "actuator", None)
         if act is not None and act.n_states:
             aug[a_slot] = act.initial(getattr(design.u, element.mv))
@@ -595,8 +599,10 @@ def integrate(
     breakpoints=None,
     jacobian: str = "internal",
     device: str = "cpu",
+    x0: np.ndarray | None = None,
 ) -> Run:
-    """Integrate the closed-loop plant.
+    """Integrate the closed-loop plant, from the design point or from the plant state `x0`
+    with the augmented states of `initial_augmented`.
 
     `X` holds the plant states only.  `U` is a dict of arrays, reconstructed after the
     fact so that the control action can be plotted alongside the states: one per scalar
@@ -635,7 +641,8 @@ def integrate(
     if device != "cpu" and jacobian != "batched":
         raise ValueError("a device other than the CPU needs jacobian='batched'")
     pp = design.pp
-    y0 = np.concatenate([design.x, initial_augmented(structure, design)])
+    x0 = design.x if x0 is None else np.asarray(x0, dtype=float)
+    y0 = np.concatenate([x0, initial_augmented(structure, design, x0)])
     t_eval = np.linspace(0.0, t_end, n_points)
     events = None if wall_budget is None else _deadline(time.perf_counter() + wall_budget)
     args = (structure, design.u, pp, disturbance, design.rhs)
@@ -898,6 +905,26 @@ def with_setpoint_steps(structure: Structure,
             e = replace(loop, sp_schedule=loop.sp_schedule + extra)
         out.append(e)
     return out
+
+
+def without_inputs(structure: Structure, inputs) -> tuple[Structure, Structure]:
+    """The structure with every element that writes one of the named inputs removed, and
+    the removed elements, in structure order.
+
+    A loop or a ratio station whose manipulated variable is one of `inputs` goes, and so
+    does a cascade primary whose secondary has gone, at any depth.  A ratio station whose
+    source is one of them stays and follows it.  Inputs no element writes remove nothing.
+    """
+    inputs = set(inputs)
+    removed = {e.name for e in structure if e.mv in inputs}
+    while True:
+        more = {e.name for e in structure if e.name not in removed
+                and e.mv.startswith("sp:") and e.mv[3:] in removed}
+        if not more:
+            break
+        removed |= more
+    return ([e for e in structure if e.name not in removed],
+            [e for e in structure if e.name in removed])
 
 
 TUNABLE = ("Kc", "tau_I", "lo", "hi", "tau_D", "alpha")

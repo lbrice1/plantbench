@@ -150,3 +150,31 @@ def test_disturbances_declare_their_discontinuities():
     assert dist.ramp("m", value=1.0, t=5.0, duration=10.0).times == (5.0, 15.0)
     both = dist.combine(dist.step("m", value=1.0, t=5.0), dist.step("d", value=1.0, t=2.0))
     assert both.times == (2.0, 5.0)
+
+
+def test_without_inputs_removes_the_writers_and_their_primaries():
+    """On the two tanks, holding q1 removes its level loop and the cascade primary over it;
+    the ratio station that follows q1 stays."""
+    from _tanks import tanks_design, tanks_structure
+
+    S = tanks_structure(tanks_design())
+    kept, removed = ctl.without_inputs(S, ["q1"])
+    assert [e.name for e in kept] == ["q2 ratio"]
+    assert [e.name for e in removed] == ["level 2", "level 1"]
+    assert ctl.without_inputs(S, ["d"]) == (S, [])
+
+
+def test_augmented_states_start_at_rest_at_a_given_start(design):
+    """Instrument and filter states start at the measurement at the start, the actuator at
+    the design position of its valve, the integral at zero."""
+    from plantbench.core.instruments import Actuator, Instrument
+
+    loop = toy_loop(setpoint=2.0, bias=1.0, tau_D=1.0, instrument=Instrument(tau=1.0),
+                    actuator=Actuator(tau=0.5))
+    aug = ctl.initial_augmented([loop], design, np.array([3.0]))
+    slots, n = ctl.state_layout([loop])
+    i_slot, a_slot, f_slot = slots[0]
+    assert aug[0] == 0.0 and np.all(aug[i_slot] == 3.0) and aug[f_slot][0] == 3.0
+    assert np.all(aug[a_slot] == design.u.m)
+    assert np.array_equal(ctl.initial_augmented([loop], design),
+                          ctl.initial_augmented([loop], design, design.x))
