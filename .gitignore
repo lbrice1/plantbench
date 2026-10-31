@@ -36,6 +36,7 @@ docs/apidocs/
 # The record `plantbench contribute` keeps of its edits, for --revert.
 .contribute/
 
-# Slurm output of the Della jobs in benchmarks/
+# Slurm output of the cluster jobs in benchmarks/
 pb-bench-*.out
 pb-profile-*.out
+pb-ab-*.out
