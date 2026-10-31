@@ -37,7 +37,7 @@ import pickle
 import sys
 import time
 import weakref
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any, Mapping
 
 import numpy as np
@@ -58,7 +58,9 @@ class Step:
     input_values` flattens them), named measurements as a sampled instrument reports them,
     the signals of the remaining loops (`control.apply`), the right-hand-side evaluations
     the interval took, and the true values of the measurements.  `y` and `y_true` differ
-    only under a configuration's `noise`."""
+    only under a configuration's `noise`.  `y_min` and `y_max` hold, for the measurements
+    a stepper was asked for, the smallest and the largest true value found over the
+    interval (`Stepper`, `extrema`)."""
 
     t: float
     x: np.ndarray
@@ -67,6 +69,8 @@ class Step:
     c: dict[str, float]
     nfev: int
     y_true: dict[str, float]
+    y_min: dict[str, float] = field(default_factory=dict)
+    y_max: dict[str, float] = field(default_factory=dict)
 
 
 class Stepper:
@@ -92,11 +96,19 @@ class Stepper:
     and the end of each step), a draw of zero mean and the given standard deviation, from
     a generator seeded by the section's `seed` and used for nothing else.  The loops that
     remain see the true values, as `run`'s do; `Step.y_true` holds them beside `Step.y`.
+
+    `extrema` names measurements whose smallest and largest true values over each interval
+    a step reports (`Step.y_min`, `Step.y_max`).  They are taken over `refine` equal parts
+    of every segment of the interval between breakpoints, on the solver's dense output,
+    and on both sides of each breakpoint, with the interval's ends included.  They are
+    numerical estimates that converge as `refine` grows, not bounds: an excursion shorter
+    than a part can be missed.  The refinement does not change the integration.
     """
 
     def __init__(self, setup: Setup, dt: float, inputs=(), setpoints=(),
                  rtol: float = 1e-8, atol: float = 1e-10, step_budget: float | None = None,
-                 episode_budget: float | None = None, startup_budget: float | None = None):
+                 episode_budget: float | None = None, startup_budget: float | None = None,
+                 extrema=(), refine: int = 10):
         if not dt > 0.0:
             raise ValueError("the interval dt must be positive")
         for name, budget in (("step_budget", step_budget), ("episode_budget", episode_budget),
@@ -116,6 +128,14 @@ class Stepper:
         self._owned_loops = self._check_setpoints()
         self.breakpoints = ctl.breakpoints_of(self.disturbance, self.structure)
         self.measurements = setup.case.measurements(self.design)
+        self.extrema = tuple(extrema)
+        unknown = sorted(set(self.extrema) - set(self.measurements))
+        if unknown:
+            raise KeyError(f"no measurements {unknown}; measurements: "
+                           f"{sorted(self.measurements)}")
+        if int(refine) != refine or refine < 1:
+            raise ValueError("refine is a whole number of parts per segment, at least 1")
+        self.refine = int(refine)
         noise = setup.config.noise
         self.noise_std = {k: float(noise["std"][k]) for k in sorted(noise.get("std", {}))}
         self.noise_seed = int(noise.get("seed", 0))
@@ -164,6 +184,7 @@ class Stepper:
         self.nfev = 0
         self.spent = 0.0  # wall-clock seconds of the steps since the start
         self.action = self.nominal_action()
+        self._range: tuple[dict, dict] = ({}, {})
         self._rng = np.random.default_rng(self.noise_seed if noise_seed is None else noise_seed)
         self._noise = self._draw()
 
@@ -229,36 +250,60 @@ class Stepper:
         start = time.perf_counter()
         try:
             if self._worker is None:
-                y, nfev = self._advance(self._y, self.t, action)
+                y, nfev, extremes = self._advance(self._y, self.t, action)
             else:
-                y, nfev = self._advance_in_worker(action)
+                y, nfev, extremes = self._advance_in_worker(action)
         finally:
             self.spent += time.perf_counter() - start
-        self._y, self.t, self.action = y, self.t + self.dt, action
+        self._y, self.t, self.action, self._range = y, self.t + self.dt, action, extremes
         self.nfev += nfev
         self._noise = self._draw()
         return self._observe(nfev)
 
-    def _advance(self, y: np.ndarray, t: float, action: dict) -> tuple[np.ndarray, int]:
-        """The closed-loop state after one interval from (t, y) under `action`, and the
-        evaluations it took."""
+    def _advance(self, y: np.ndarray, t: float, action: dict
+                 ) -> tuple[np.ndarray, int, tuple[dict, dict]]:
+        """The closed-loop state after one interval from (t, y) under `action`, the
+        evaluations it took, and the extremes of the `extrema` measurements over it."""
         S = self._structure_with(action)
         owned = {f: action[f] for f in self.inputs}
         a, b = t, t + self.dt
         edges = [a, *(c for c in self.breakpoints if a < c < b), b]
         nfev = 0
+        lo_values: dict[str, float] = {}
+        hi_values: dict[str, float] = {}
         for lo, hi in zip(edges[:-1], edges[1:]):
+            grid = np.linspace(lo, hi, self.refine + 1) if self.extrema else [hi]
             sol = solve_ivp(self._rhs, (lo, hi), y, args=(S, owned), method="LSODA",
-                            t_eval=[hi], rtol=self.rtol, atol=self.atol)
+                            t_eval=grid, rtol=self.rtol, atol=self.atol)
             if not sol.success:
                 raise StepFailed(f"integration failed on [{lo:g}, {hi:g}]: {sol.message}")
             nfev += int(sol.nfev)
+            if self.extrema:
+                if not np.isfinite(sol.y).all():
+                    raise StepFailed(f"non-finite state on [{lo:g}, {hi:g}]")
+                # The segment's end is evaluated with the inputs in force just before it,
+                # its start with those from it on: both sides of each breakpoint.
+                times = [*sol.t[:-1], np.nextafter(hi, lo)]
+                for tk, yk in zip(times, sol.y.T):
+                    u, _ = self._evaluate(tk, yk, S, owned)
+                    for name in self.extrema:
+                        v = float(self.measurements[name](yk[:len(self.design.x)], u,
+                                                          self.design.pp))
+                        lo_values[name] = min(lo_values.get(name, v), v)
+                        hi_values[name] = max(hi_values.get(name, v), v)
             y = sol.y[:, -1]
             if not np.isfinite(y).all():
                 raise StepFailed(f"non-finite state at t = {hi:g}")
-        return y, nfev
+        if self.extrema:
+            # The interval's end as the next interval sees it, with the inputs at b.
+            u, _ = self._evaluate(b, y, S, owned)
+            for name in self.extrema:
+                v = float(self.measurements[name](y[:len(self.design.x)], u, self.design.pp))
+                lo_values[name] = min(lo_values[name], v)
+                hi_values[name] = max(hi_values[name], v)
+        return y, nfev, (lo_values, hi_values)
 
-    def _advance_in_worker(self, action: dict) -> tuple[np.ndarray, int]:
+    def _advance_in_worker(self, action: dict) -> tuple[np.ndarray, int, tuple[dict, dict]]:
         limits = [b for b in (self.step_budget,
                               None if self.episode_budget is None
                               else self.episode_budget - self.spent) if b is not None]
@@ -305,7 +350,7 @@ class Stepper:
         y = {name: float(f(x, u, self.design.pp)) for name, f in self.measurements.items()}
         measured = {name: v + self._noise.get(name, 0.0) for name, v in y.items()}
         return Step(self.t, x, values, measured, {k: float(v) for k, v in signals.items()},
-                    nfev, y)
+                    nfev, y, dict(self._range[0]), dict(self._range[1]))
 
 
 # ------------------------------------------------------------------------------------
@@ -342,12 +387,13 @@ def _portable(exc: BaseException) -> BaseException:
 
 
 def _serve(conn, module: str, attr: str, config: dict, dt: float, inputs, setpoints,
-           rtol: float, atol: float) -> None:
+           rtol: float, atol: float, extrema, refine: int) -> None:
     """The worker: build the plant, report its design and start, then advance intervals
     on request until told to stop or the connection closes."""
     try:
         case = getattr(importlib.import_module(module), attr)
-        stepper = Stepper(build(case, config), dt, inputs, setpoints, rtol, atol)
+        stepper = Stepper(build(case, config), dt, inputs, setpoints, rtol, atol,
+                          extrema=extrema, refine=refine)
     except BaseException as exc:  # noqa: BLE001 -- reported to the parent
         conn.send(("error", _portable(exc)))
         return
@@ -378,7 +424,8 @@ class _Worker:
         self.process = ctx.Process(
             target=_serve, daemon=True,
             args=(child, module, attr, setup.config.to_dict(), stepper.dt, stepper.inputs,
-                  stepper.setpoints, stepper.rtol, stepper.atol))
+                  stepper.setpoints, stepper.rtol, stepper.atol, stepper.extrema,
+                  stepper.refine))
         self.process.start()
         child.close()
         self._finalizer = weakref.finalize(stepper, _stop, self.process, self.conn)

@@ -172,6 +172,16 @@ The action is held over the interval (zero-order hold), and the integration rest
 
 A configuration's `noise` section gives the measurements a sampled instrument reports with white noise: at each sample, the start and the end of every step, each named measurement receives a draw of zero mean and the given standard deviation. The draws come from a generator of their own, seeded by the section's `seed`, so the noise and a scenario's random disturbance (`random_sequence`) vary independently. `Step.y` holds the measured values and `Step.y_true` the true ones, which the loops that remain see as well, as in a continuous run; the noise never enters the right-hand side. `observe()` returns the current sample without drawing again, and `reset()` seeds the generator again, from the section or from `reset(noise_seed=...)`. A continuous run has no samples, so `pb.run`, ensembles and dataset generation refuse a configuration with `noise`; the noise of an `Instrument` (`noise_std`) remains unimplemented for the same reason.
 
+A stepper sees the plant at its samples only, and a measurement can leave a limit between two samples and return before the next. `extrema` names measurements whose smallest and largest true values over each interval a step reports, in `Step.y_min` and `Step.y_max`:
+
+```python
+stepper = pb.Stepper(setup, dt=1.0, extrema=["T"], refine=10)
+st = stepper.step()
+st.y_min["T"], st.y_max["T"]
+```
+
+The values are taken on the solver's dense output at `refine` equal parts of each segment of the interval, the segments being the parts between breakpoints, and on both sides of each breakpoint, where an input that steps makes a measurement that reads it jump. The interval's ends are included. The refinement changes nothing in the integration. The values are numerical estimates that converge as `refine` grows, not guaranteed bounds of the continuous-time signal: an excursion shorter than one part can still be missed.
+
 `step_budget` limits the wall-clock seconds of one step, and `episode_budget` those of all the steps since the start or the last `reset()`; the caller's own time between steps does not count. A step that stalls inside LSODA cannot be interrupted from Python, since the solver is compiled and a signal reaches only the main thread of a POSIX process. A stepper with either budget therefore integrates in a worker process of its own, spawned once and kept until `close()` or the end of a `with` block. When a step runs over, the worker is terminated and the step raises `control.WallTimeExceeded`. The stepper is then invalid, and a new one is built to go on. This works from any thread and on any platform:
 
 ```python

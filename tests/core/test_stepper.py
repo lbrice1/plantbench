@@ -361,3 +361,66 @@ def test_a_continuous_run_refuses_noise(tmp_path):
 def test_malformed_noise_is_refused(noise, error):
     with pytest.raises(error):
         pb.build(CSTR, CSTR.config("temperature PI", noise=noise))
+
+
+# -- extremes between samples -----------------------------------------------------
+
+PULSE = {"name": "sequence", "field": "F_in", "times": [2.1, 2.5], "levels": [1.0, 0.0]}
+
+
+def test_the_refinement_leaves_the_integration_as_it_was():
+    config = CSTR.config("temperature PI", disturbance=FEED)
+    plain = pb.Stepper(pb.build(CSTR, config), 0.5)
+    refined = pb.Stepper(pb.build(CSTR, config), 0.5, extrema=("T", "Tj"), refine=7)
+    for _ in range(40):
+        a, b = plain.step(), refined.step()
+        assert np.array_equal(a.x, b.x) and a.nfev == b.nfev
+        assert b.y_min["T"] <= min(b.y["T"], b.y_true["T"]) <= b.y_max["T"]
+    assert a.y_min == {} and a.y_max == {}
+
+
+def test_an_excursion_between_samples_is_found():
+    """The inflow doubles over [2.1, 2.5], inside the interval [2, 3]: the level peaks at
+    2.5 and falls before 3, so neither end of the interval sees the peak."""
+    config = TEMPLATE.config("level PI", disturbance=PULSE)
+    s = pb.Stepper(pb.build(TEMPLATE, config), 1.0, extrema=("level",))
+    at_2, at_3 = s.step().y["level"], (s.step(), s.step())[1]
+    ref = pb.run(TEMPLATE, config, t_end=3.0, n_points=3001)
+    peak = ref.y["level"][(ref.t >= 2.0) & (ref.t <= 3.0)].max()
+    assert at_3.y_max["level"] > max(at_2, at_3.y["level"]) + 0.03
+    assert at_3.y_max["level"] == pytest.approx(peak, rel=1e-6)
+    assert at_3.y_min["level"] == pytest.approx(at_2, rel=1e-9)
+
+
+def test_both_sides_of_a_discontinuity_are_evaluated():
+    """The valve closes to 0.1 at 2.5: the outflow drops at that instant, so its least
+    value over [2, 3] is the one just after the step, and its largest the one just before."""
+    config = TEMPLATE.config("open loop", disturbance={"name": "step", "field": "valve",
+                                                       "value": 0.1, "t": 2.5})
+    s = pb.Stepper(pb.build(TEMPLATE, config), 1.0, extrema=("outflow",), refine=1)
+    design = s.design
+    before = design.pp.Cv * design.u.valve * np.sqrt(design.x[0])
+    s.step(), s.step()
+    st = s.step()
+    assert st.y_max["outflow"] == pytest.approx(before, rel=1e-9)
+    assert st.y_min["outflow"] == pytest.approx(design.pp.Cv * 0.1 * np.sqrt(design.x[0]),
+                                                rel=1e-9)
+    assert st.y_min["outflow"] < st.y["outflow"]
+    assert s.observe().y_min == st.y_min  # the last interval's, until the next step
+
+
+def test_extremes_in_a_worker_are_those_of_the_caller():
+    config = CSTR.config("temperature PI", disturbance=FEED)
+    plain = pb.Stepper(pb.build(CSTR, config), 0.5, extrema=("T",))
+    with pb.Stepper(pb.build(CSTR, config), 0.5, extrema=("T",), step_budget=30.0) as limited:
+        for _ in range(5):
+            a, b = plain.step(), limited.step()
+            assert a.y_min == b.y_min and a.y_max == b.y_max
+
+
+@pytest.mark.parametrize("kw, error", [({"extrema": ("nope",)}, KeyError),
+                                       ({"extrema": ("T",), "refine": 0}, ValueError),
+                                       ({"extrema": ("T",), "refine": 2.5}, ValueError)])
+def test_malformed_extrema_are_refused(kw, error):
+    with pytest.raises(error):
+        pb.Stepper(pb.build(CSTR, CSTR.config("temperature PI")), 0.5, **kw)
