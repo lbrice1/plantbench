@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from plantbench.core import control as ctl
 from plantbench.core.case import Case, Config, override
-from plantbench.core.casekit import state_measurement
+from plantbench.core.casekit import parameter_mismatch, state_measurement
 from plantbench.core.control import Loop
 
 from .model import LAYOUT, Design, TankParameters, solve_design
@@ -58,4 +58,7 @@ CASE = Case(
     disturbances={},
     measurements=lambda design: {"level": m_level, "outflow": m_outflow},
     state_names=lambda design: LAYOUT.names(),
+    # The right-hand side reads the parameters it is passed, so a `mismatch` section can
+    # override them on the design; drop this if the model holds parameters of its own.
+    apply_mismatch=parameter_mismatch,
 )

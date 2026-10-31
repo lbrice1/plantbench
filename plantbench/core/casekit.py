@@ -4,6 +4,7 @@
     state_measurement    a measurement that reads one state
     measured             a measure's value, for one state or a batch
     cached_design        cache a slow design solve per worker process
+    parameter_mismatch   the plant of a design under changed parameters, for `mismatch`
     fixed_point_residual how far the design point is from a steady state, and where
 
 None of these is required; a case that writes the same thing by hand keeps the contract
@@ -14,11 +15,13 @@ from __future__ import annotations
 
 import dataclasses
 from functools import lru_cache
-from typing import Callable, Sequence
+from typing import Callable, Mapping, Sequence
 
 import numpy as np
 
 from plantbench.backend import namespace, to_host
+
+from .case import override
 
 
 class StateLayout:
@@ -149,6 +152,14 @@ def cached_design(solve: Callable) -> Callable:
     than options and params do not change the design.
     """
     return lru_cache(maxsize=16)(solve)
+
+
+def parameter_mismatch(design, overrides: Mapping[str, float]):
+    """The design with its parameters `design.pp` overridden by dotted path and its state and
+    inputs kept: a case's `apply_mismatch` when the design is a dataclass whose right-hand
+    side and measures read the parameters they are passed, rather than parameters held in
+    an object built from them."""
+    return dataclasses.replace(design, pp=override(design.pp, overrides))
 
 
 def fixed_point_residual(design, names: Sequence[str] | None = None,

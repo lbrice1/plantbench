@@ -22,7 +22,7 @@ from __future__ import annotations
 from plantbench.core import control as ctl
 from plantbench.core import disturbances as dist
 from plantbench.core.case import Case, Config, override
-from plantbench.core.casekit import cached_design, state_measurement
+from plantbench.core.casekit import cached_design, parameter_mismatch, state_measurement
 from plantbench.core.control import Loop
 from plantbench.units.parameters import ReactorParameters
 
@@ -107,4 +107,5 @@ CASE = Case(
     disturbances={"feed_temperature": feed_temperature},
     measurements=lambda design: {"C_A": m_CA, "T": m_T, "Tj": m_Tj},
     state_names=lambda design: LAYOUT.names(),
+    apply_mismatch=parameter_mismatch,
 )

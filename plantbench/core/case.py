@@ -52,9 +52,14 @@ class Config:
     instruments      loop name -> keyword arguments of `Instrument`
     actuators        loop name -> keyword arguments of `Actuator`
     disturbance      {"name": ..., **arguments}, or a list of them; empty for none
+    mismatch         overrides of the plant's parameters by dotted path, applied after the
+                     design is solved and the structure biased from it: the plant departs
+                     from the design while the start, the biases and the set-points stay
 
     Every section is empty by default, and a configuration with only a structure named
-    is the case's reference plant.
+    is the case's reference plant.  `params` moves the design with the parameters, and
+    with it the regulatory layer; `mismatch` leaves both as designed, which is model-plant
+    mismatch.  A case supports `mismatch` when it declares `Case.apply_mismatch`.
     """
 
     structure: str
@@ -66,9 +71,16 @@ class Config:
     instruments: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     actuators: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     disturbance: Mapping[str, Any] | list = field(default_factory=dict)
+    mismatch: Mapping[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
-        return _plain(dataclasses.asdict(self))
+        d = _plain(dataclasses.asdict(self))
+        # Sections added after 0.3.0 are written only when used, so that a configuration
+        # without them keeps the key, and with it the run id, it had before.
+        for name in _LATER_SECTIONS:
+            if not d[name]:
+                del d[name]
+        return d
 
     @classmethod
     def from_dict(cls, d: Mapping[str, Any]) -> Config:
@@ -85,6 +97,9 @@ class Config:
         """A stable hash of the configuration, the same across processes and sessions."""
         text = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"))
         return hashlib.sha1(text.encode()).hexdigest()[:16]
+
+
+_LATER_SECTIONS = ("mismatch",)
 
 
 def _plain(v):
@@ -148,6 +163,10 @@ class Case:
     features               name -> f(setup) -> {name: value}, case-specific quantities a
                            dataset may record alongside each run; the generic features of
                            `GENERIC_FEATURES` are available to every case
+    apply_mismatch         (design, overrides) -> the plant of the design with its
+                           parameters overridden and its state and inputs kept, for the
+                           `mismatch` section (`casekit.parameter_mismatch`); None, the
+                           default, when the case does not support one
     """
 
     id: str
@@ -162,6 +181,7 @@ class Case:
     measurements: Callable[[Any], Mapping[str, Measurement]]
     state_names: Callable[[Any], list[str]]
     features: Mapping[str, Feature] = field(default_factory=dict)
+    apply_mismatch: Callable[[Any, Mapping[str, float]], Any] | None = None
 
     def config(self, structure: str | None = None, **sections) -> Config:
         """A configuration of this case, with its options defaulted and checked."""
@@ -179,6 +199,9 @@ class Case:
         if unknown:
             raise KeyError(f"case {self.id} has no options {sorted(unknown)}; "
                            f"options: {sorted(self.options)}")
+        if config.mismatch and self.apply_mismatch is None:
+            raise ValueError(f"case {self.id} does not support a mismatch section; use "
+                             "params, which moves the design with the parameters")
         options = {**self.options, **config.options}
         return replace(config, options=options)
 
@@ -191,16 +214,26 @@ GENERIC_DISTURBANCES: dict[str, Callable[..., dist.Disturbance]] = {
 
 @dataclass
 class Setup:
-    """A configured plant at its design point, ready to simulate."""
+    """A configured plant at its design point, ready to simulate.
+
+    Under a `mismatch` section, `design` is the plant, with the changed parameters, at the
+    state and inputs of `nominal`, the design the structure was biased from; otherwise
+    `nominal` is None."""
 
     case: Case
     config: Config
     design: Any
     structure: ctl.Structure
     disturbance: dist.Disturbance | None
+    nominal: Any = None
 
     def spectrum(self) -> np.ndarray:
-        """Closed-loop eigenvalues at the design point, structural zeros removed."""
+        """Closed-loop eigenvalues at the design point, structural zeros removed.
+
+        Raises under a `mismatch` section, whose start is not a steady state of the plant."""
+        if self.nominal is not None:
+            raise ValueError("under a mismatch section the design point is not a steady "
+                             "state of the plant, so it has no closed-loop spectrum")
         return ctl.closed_loop_spectrum(self.design, self.structure)
 
 
@@ -228,8 +261,9 @@ def build(case: Case, config: Config | Mapping) -> Setup:
 
 
 def build_on(case: Case, design, config: Config) -> Setup:
-    """`build` on a design already made, for a validated configuration: the structure and
-    the disturbance, which are all that the members of an ensemble do not share."""
+    """`build` on a design already made, for a validated configuration: the structure, the
+    disturbance and any mismatch, which are all that the members of an ensemble do not
+    share."""
     structure = case.make_structure(design, config)
     structure = ctl.with_tuning(structure, config.tuning)
     structure = ctl.with_setpoints(structure, config.setpoints)
@@ -239,14 +273,40 @@ def build_on(case: Case, design, config: Config) -> Setup:
         instruments={k: Instrument(**v) for k, v in config.instruments.items()},
         actuators={k: Actuator(**v) for k, v in config.actuators.items()},
     )
-    return Setup(case, config, design, structure, _disturbance(case, design, config))
+    disturbance = _disturbance(case, design, config)
+    if not config.mismatch:
+        return Setup(case, config, design, structure, disturbance)
+    plant = case.apply_mismatch(design, config.mismatch)
+    _check_mismatch_acts(case, design, plant, structure, config.mismatch)
+    return Setup(case, config, plant, structure, disturbance, nominal=design)
+
+
+def _check_mismatch_acts(case: Case, design, plant, structure: ctl.Structure,
+                         overrides: Mapping[str, float]) -> None:
+    """Raise if the overrides change neither the closed-loop right-hand side nor a
+    measurement at the design point.  A parameter that the design solve turns into an
+    input, a feed condition, is such a case: the inputs stay at the design, so overriding
+    it would leave the plant as designed without saying so."""
+    y = np.concatenate([design.x, ctl.initial_augmented(structure, design)])
+    before = ctl.closed_loop_rhs(0.0, y, structure, design.u, design.pp, None, design.rhs)
+    after = ctl.closed_loop_rhs(0.0, y, structure, plant.u, plant.pp, None, plant.rhs)
+    if not np.array_equal(before, after):
+        return
+    designed, perturbed = case.measurements(design), case.measurements(plant)
+    if any(designed[k](design.x, design.u, design.pp) != perturbed[k](plant.x, plant.u, plant.pp)
+           for k in designed):
+        return
+    raise ValueError(f"mismatch {sorted(overrides)} changes neither the plant's right-hand "
+                     "side nor a measurement at the design point; a parameter the design "
+                     "turns into an input is changed through the disturbance instead")
 
 
 def design_key(config: Config) -> str:
     """What decides a configuration's design: configurations with the same key can be
     built on one design and run as one ensemble.  A case's `make_design` reads the
     parameters and the options; the structure is included as well, since the structures
-    of an ensemble must have the same elements."""
+    of an ensemble must have the same elements.  A `mismatch` is applied to the plant
+    after the design is made and is not part of it."""
     return json.dumps({"structure": config.structure, "options": dict(config.options),
                        "params": dict(config.params)}, sort_keys=True, default=str)
 

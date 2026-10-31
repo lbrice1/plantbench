@@ -334,3 +334,21 @@ dt = 1.0
     assert [r["status"] for r in records] == ["ok"] * 3
     assert all(r["solver"] == {"ensemble": 4, "device": "cpu"} and r["ensemble_size"] == 3
                for r in records)
+
+
+def test_a_mismatch_sweep_is_recorded_on_one_design(tmp_path):
+    """`mismatch` is swept like `params`; its runs are ok where `params` has no design,
+    and a feature that needs a steady state records why it has none."""
+    spec = Spec.from_dict({
+        "study": {"name": "m", "case": "jacketed_cstr"},
+        "base": {"structure": "temperature PI"},
+        "sweep": {"mismatch.k0": [2.529e11, 2.248e11]},
+        "run": {"t_end": 20.0, "dt": 5.0, "features": ["spectrum"]},
+    })
+    out = datagen.generate(spec, tmp_path / "d", log=_quiet)
+    records = datagen.load_records(out)
+    assert [r["status"] for r in records] == ["ok", "ok"]
+    assert all("not a steady state" in r["features"]["spectrum_error"] for r in records)
+    assert {r["config"]["mismatch"]["k0"] for r in records} == {2.529e11, 2.248e11}
+    with open(out / "index.csv") as f:
+        assert "config.mismatch.k0" in next(csv.DictReader(f))

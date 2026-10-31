@@ -163,3 +163,34 @@ def test_the_network_pressure_must_be_positive():
         build(case, case.validate({"structure": "effluent fixed + cascade",
                                    "options": {"network": "D3"},
                                    "params": {"column.P_network": -1.0}}))
+
+
+# The first mismatch draw of rrl's stress set on this case (rrl notes, entry 7), rounded.
+MISMATCH = {"reactor.k0": 3.0e11, "reactor.U": 300.0, "reactor.dH": 8.5e4}
+
+
+def _loops(setup):
+    return {e.name: (e.bias, e.setpoint) for e in setup.structure if isinstance(e, ctl.Loop)}
+
+
+def test_a_mismatch_keeps_the_loops_of_the_nominal_design():
+    """Under `params` the design follows the parameters and the tray temperature set-point
+    moves; under `mismatch` every bias and set-point is the nominal design's."""
+    nominal = pb.build(CASE)
+    mismatched = pb.build(CASE, CASE.config(mismatch=MISMATCH))
+    moved = pb.build(CASE, CASE.config(params=MISMATCH))
+    assert _loops(mismatched) == _loops(nominal)
+    assert _loops(moved)["tray T"][1] != pytest.approx(_loops(nominal)["tray T"][1], abs=0.1)
+    assert mismatched.design.pp.reactor.U == 300.0
+    assert np.array_equal(mismatched.design.x, nominal.design.x)
+
+
+@pytest.mark.parametrize("path", ["column.P_base", "column.P_network"])
+def test_a_column_pressure_cannot_be_a_mismatch(path):
+    with pytest.raises(ValueError, match="column pressure"):
+        pb.build(CASE, CASE.config(mismatch={path: 1.0}))
+
+
+def test_the_economics_of_a_mismatch_are_those_of_its_design():
+    economics = features_of(CASE)["economics"]
+    assert economics(pb.build(CASE, CASE.config(mismatch=MISMATCH))) == economics(pb.build(CASE))

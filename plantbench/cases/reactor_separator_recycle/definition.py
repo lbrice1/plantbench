@@ -16,6 +16,7 @@ from functools import lru_cache
 from plantbench.core import control as ctl
 from plantbench.core import disturbances as dist
 from plantbench.core.case import Case, Config, override
+from plantbench.core.casekit import parameter_mismatch
 
 from . import economics as ec
 from . import hen, integrated, plant, streams
@@ -80,6 +81,22 @@ def make_design(config: Config):
     return _integrated(pp, float(opts["V_boil"]), network, None if share is None else float(share))
 
 
+# Parameters a structure or a network is built on: the tray temperature loop reads the
+# column pressure when it is made, and the network is sized at it.
+_DESIGN_CHOICES = ("column.P_base", "column.P_network")
+
+
+def apply_mismatch(design, overrides):
+    """The plant under changed parameters on the design (`Config.mismatch`).  The column
+    pressures are refused: they are operating choices the loops and the network are built
+    on, not properties in which the plant could differ from its design."""
+    refused = sorted(set(overrides) & set(_DESIGN_CHOICES))
+    if refused:
+        raise ValueError(f"{refused} cannot be a mismatch: the tray temperature loop and the "
+                         "heat-exchanger network are built on the column pressure; use params")
+    return parameter_mismatch(design, overrides)
+
+
 def make_structure(design, config: Config) -> ctl.Structure:
     if isinstance(design, integrated.IntegratedDesign):
         if config.structure not in INTEGRATED_STRUCTURES:
@@ -126,9 +143,9 @@ def economics(setup) -> dict:
     Profit and utility cost are $/h, both global warming potentials t CO2e/h, and the heat
     recovered GJ/h: the network's duties are kJ/min internally and are converted here, so
     that every number the feature records is on the same per-hour basis as the reference
-    results.
+    results.  Under a mismatch the design point is the nominal design's.
     """
-    design = setup.design
+    design = setup.design if setup.nominal is None else setup.nominal
     if isinstance(design, integrated.IntegratedDesign):
         pp = design.pp
         op = streams.design_point(design.base)
@@ -225,4 +242,5 @@ CASE = Case(
     measurements=measurements,
     state_names=state_names,
     features={"economics": economics},
+    apply_mismatch=apply_mismatch,
 )
