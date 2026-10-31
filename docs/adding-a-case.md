@@ -4,7 +4,7 @@ This page is the reference for a case in the library: its name, what it must pro
 
 ## Starting point
 
-`plantbench/cases/_template/` is a working case, a gravity-drained tank with a level loop, kept working by the contract tests. Start from it in a package of your own,
+`plantbench/cases/_template/` is a working case, a gravity-drained tank with a level loop, kept working by the contract tests. It is not registered, so `load_case` does not offer it; code that needs a small working plant imports it as `from plantbench.cases.template import CASE`. Start from it in a package of your own,
 
 ```
 plantbench new-case <name>

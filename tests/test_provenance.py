@@ -83,7 +83,7 @@ def test_without_git_nothing_is_recorded_rather_than_guessed(tmp_path, monkeypat
 def test_a_case_of_ones_own_records_where_it_comes_from():
     from dataclasses import replace
 
-    from plantbench.cases._template.definition import CASE
+    from plantbench.cases.template import CASE
     pb.register(replace(CASE, id="provenance_tank"))
     try:
         p = pb.provenance("provenance_tank")
