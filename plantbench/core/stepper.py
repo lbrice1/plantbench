@@ -19,18 +19,32 @@ The policy owns inputs, set-points, or both:
 With nothing owned, the stepper integrates the closed loop `run` integrates, restarted at
 every step boundary as well as at the breakpoints of the disturbance and the set-point
 schedules; the two agree to the solver's tolerance.
+
+A step that stalls inside the solver cannot be interrupted from Python: the solver is
+compiled, and a signal reaches only the main thread of a POSIX process.  A stepper given a
+time limit therefore integrates in a worker process of its own, spawned once and kept for
+the stepper's life, and terminates it when a step runs over; the stepper is then
+invalidated.  The worker rebuilds the configured plant from the case's importable module
+and the plain configuration, so a case defined in a script, or changed after import, can
+be stepped only without a limit.
 """
 
 from __future__ import annotations
 
+import importlib
+import multiprocessing
+import pickle
+import sys
+import time
+import weakref
 from dataclasses import dataclass, replace
-from typing import Mapping
+from typing import Any, Mapping
 
 import numpy as np
 from scipy.integrate import solve_ivp
 
 from . import control as ctl
-from .case import Setup, _check_inputs, _check_undisturbed
+from .case import Case, Setup, _check_inputs, _check_undisturbed, build
 
 
 class StepFailed(RuntimeError):
@@ -62,12 +76,25 @@ class Stepper:
     remain.  Refused: an input the design does not have or that is not a scalar, an input
     the configuration holds or a disturbance changes, a set-point of a loop that is removed
     or whose set-point a cascade primary writes, and a set-point that carries a schedule.
+
+    `step_budget` limits the wall-clock seconds of one step, and `episode_budget` those of
+    all the steps since the start or the last `reset`; the time a caller spends between
+    steps does not count.  With either, the stepper integrates in a worker process
+    (`close` ends it, as does leaving a `with` block), and a step that runs over raises
+    `control.WallTimeExceeded` after the worker has been terminated; the stepper cannot be
+    used again.  `startup_budget` limits the worker's start, which builds the plant again;
+    None waits for it.  The setup must be one `build` makes from its configuration.
     """
 
     def __init__(self, setup: Setup, dt: float, inputs=(), setpoints=(),
-                 rtol: float = 1e-8, atol: float = 1e-10):
+                 rtol: float = 1e-8, atol: float = 1e-10, step_budget: float | None = None,
+                 episode_budget: float | None = None, startup_budget: float | None = None):
         if not dt > 0.0:
             raise ValueError("the interval dt must be positive")
+        for name, budget in (("step_budget", step_budget), ("episode_budget", episode_budget),
+                             ("startup_budget", startup_budget)):
+            if budget is not None and not budget > 0.0:
+                raise ValueError(f"{name} must be positive seconds, or None")
         self.setup, self.dt, self.rtol, self.atol = setup, float(dt), rtol, atol
         self.design = setup.design
         self.inputs, self.setpoints = tuple(inputs), tuple(setpoints)
@@ -81,7 +108,12 @@ class Stepper:
         self._owned_loops = self._check_setpoints()
         self.breakpoints = ctl.breakpoints_of(self.disturbance, self.structure)
         self.measurements = setup.case.measurements(self.design)
+        self.step_budget, self.episode_budget = step_budget, episode_budget
+        self._invalid: str | None = None
+        self._worker: _Worker | None = None
         self.reset()
+        if step_budget is not None or episode_budget is not None:
+            self._worker = _Worker(self, startup_budget)
 
     def _check_setpoints(self) -> dict[str, int]:
         """The position in the structure of each loop whose set-point is owned."""
@@ -117,6 +149,7 @@ class Stepper:
         self._y = np.concatenate([x0, ctl.initial_augmented(self.structure, self.design, x0)])
         self.t = 0.0
         self.nfev = 0
+        self.spent = 0.0  # wall-clock seconds of the steps since the start
         self.action = self.nominal_action()
 
     @property
@@ -168,12 +201,29 @@ class Stepper:
 
         Raises `StepFailed` if the solver fails or a state is non-finite; the stepper is
         then left where the interval began."""
+        if self._invalid is not None:
+            raise RuntimeError(self._invalid)
         action = self.nominal_action() if action is None else self._check_action(action)
+        start = time.perf_counter()
+        try:
+            if self._worker is None:
+                y, nfev = self._advance(self._y, self.t, action)
+            else:
+                y, nfev = self._advance_in_worker(action)
+        finally:
+            self.spent += time.perf_counter() - start
+        self._y, self.t, self.action = y, self.t + self.dt, action
+        self.nfev += nfev
+        return self._observe(nfev)
+
+    def _advance(self, y: np.ndarray, t: float, action: dict) -> tuple[np.ndarray, int]:
+        """The closed-loop state after one interval from (t, y) under `action`, and the
+        evaluations it took."""
         S = self._structure_with(action)
         owned = {f: action[f] for f in self.inputs}
-        a, b = self.t, self.t + self.dt
+        a, b = t, t + self.dt
         edges = [a, *(c for c in self.breakpoints if a < c < b), b]
-        y, nfev = self._y, 0
+        nfev = 0
         for lo, hi in zip(edges[:-1], edges[1:]):
             sol = solve_ivp(self._rhs, (lo, hi), y, args=(S, owned), method="LSODA",
                             t_eval=[hi], rtol=self.rtol, atol=self.atol)
@@ -183,9 +233,37 @@ class Stepper:
             y = sol.y[:, -1]
             if not np.isfinite(y).all():
                 raise StepFailed(f"non-finite state at t = {hi:g}")
-        self._y, self.t, self.action = y, b, action
-        self.nfev += nfev
-        return self._observe(nfev)
+        return y, nfev
+
+    def _advance_in_worker(self, action: dict) -> tuple[np.ndarray, int]:
+        limits = [b for b in (self.step_budget,
+                              None if self.episode_budget is None
+                              else self.episode_budget - self.spent) if b is not None]
+        limit = min(limits)
+        try:
+            if limit <= 0.0:
+                raise ctl.WallTimeExceeded(f"the episode's {self.episode_budget:g} s are "
+                                           f"spent at t = {self.t:g}")
+            return self._worker.call(("step", self._y, self.t, action), limit,
+                                     f"the step from t = {self.t:g}")
+        except (ctl.WallTimeExceeded, _WorkerLost) as exc:
+            self._invalid = (f"this stepper was stopped ({exc}) and cannot step again; "
+                             "build a new one")
+            self.close()
+            if isinstance(exc, _WorkerLost):
+                raise RuntimeError(str(exc)) from None
+            raise
+
+    def close(self) -> None:
+        """End the worker process of a stepper with a time limit; nothing otherwise."""
+        if self._worker is not None:
+            self._worker.close()
+
+    def __enter__(self) -> Stepper:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
 
     def observe(self) -> Step:
         """The plant now, under the action last held (the nominal one before any step)."""
@@ -202,3 +280,133 @@ class Stepper:
                        for name, f in getattr(self.design, "derived", {}).items()})
         y = {name: float(f(x, u, self.design.pp)) for name, f in self.measurements.items()}
         return Step(self.t, x, values, y, {k: float(v) for k, v in signals.items()}, nfev)
+
+
+# ------------------------------------------------------------------------------------
+# The worker of a stepper with a time limit
+# ------------------------------------------------------------------------------------
+
+
+class _WorkerLost(RuntimeError):
+    """The worker process ended without answering."""
+
+
+def _importable(case: Case) -> tuple[str, str]:
+    """The module and the global name under which an importable module holds `case`."""
+    for fn in (case.make_design, case.make_structure):
+        name = getattr(fn, "__module__", None)
+        module = sys.modules.get(name) if name not in (None, "__main__") else None
+        if module is None:
+            continue
+        for attr, value in vars(module).items():
+            if value is case:
+                return name, attr
+    raise ValueError(f"case {case.id} cannot be rebuilt in a worker process: no importable "
+                     "module holds it as a global.  A case defined in a script, or changed "
+                     "after import, can be stepped without a time limit only")
+
+
+def _portable(exc: BaseException) -> BaseException:
+    """The exception itself if it survives pickling, else a RuntimeError naming it."""
+    try:
+        pickle.loads(pickle.dumps(exc))
+        return exc
+    except Exception:  # noqa: BLE001 -- any exception that does not travel is described
+        return RuntimeError(f"{type(exc).__name__}: {exc}")
+
+
+def _serve(conn, module: str, attr: str, config: dict, dt: float, inputs, setpoints,
+           rtol: float, atol: float) -> None:
+    """The worker: build the plant, report its design and start, then advance intervals
+    on request until told to stop or the connection closes."""
+    try:
+        case = getattr(importlib.import_module(module), attr)
+        stepper = Stepper(build(case, config), dt, inputs, setpoints, rtol, atol)
+    except BaseException as exc:  # noqa: BLE001 -- reported to the parent
+        conn.send(("error", _portable(exc)))
+        return
+    conn.send(("ready", (stepper.design.x, stepper.setup.x0)))
+    while True:
+        try:
+            message = conn.recv()
+        except EOFError:
+            return
+        if message[0] == "close":
+            return
+        _, y, t, action = message
+        try:
+            reply = ("ok", stepper._advance(y, t, action))
+        except Exception as exc:  # noqa: BLE001 -- reported to the parent
+            reply = ("error", _portable(exc))
+        conn.send(reply)
+
+
+class _Worker:
+    """A spawned process that advances the stepper's intervals, terminated on a timeout."""
+
+    def __init__(self, stepper: Stepper, startup_budget: float | None):
+        setup = stepper.setup
+        module, attr = _importable(setup.case)
+        ctx = multiprocessing.get_context("spawn")
+        self.conn, child = ctx.Pipe()
+        self.process = ctx.Process(
+            target=_serve, daemon=True,
+            args=(child, module, attr, setup.config.to_dict(), stepper.dt, stepper.inputs,
+                  stepper.setpoints, stepper.rtol, stepper.atol))
+        self.process.start()
+        child.close()
+        self._finalizer = weakref.finalize(stepper, _stop, self.process, self.conn)
+        try:
+            x, x0 = self.call(None, startup_budget, "the worker's start")
+        except BaseException:
+            self.close()
+            raise
+        if not (np.array_equal(x, setup.design.x) and np.array_equal(x0, setup.x0)):
+            self.close()
+            raise ValueError("the worker's plant differs from the setup's: a stepper with a "
+                             "time limit needs a setup that `build` makes from its "
+                             "configuration")
+
+    def call(self, message, limit: float | None, what: str) -> Any:
+        """Send `message` (None to wait for the start) and return the reply's value, or
+        raise what the worker raised; after `limit` seconds, terminate the worker and
+        raise `WallTimeExceeded`."""
+        if message is not None:
+            try:
+                self.conn.send(message)
+            except OSError:  # the worker has gone and its end of the pipe with it
+                self.process.join(1.0)
+                raise _WorkerLost(f"the stepper's worker ended before {what} (exit code "
+                                  f"{self.process.exitcode})") from None
+        if not self.conn.poll(limit):
+            self.close()
+            raise ctl.WallTimeExceeded(f"{what} exceeded {limit:g} s; its worker was "
+                                       "terminated")
+        try:
+            kind, value = self.conn.recv()
+        except (EOFError, OSError):
+            self.process.join(1.0)
+            raise _WorkerLost(f"the stepper's worker ended during {what} (exit code "
+                              f"{self.process.exitcode})") from None
+        if kind == "error":
+            raise value
+        return value
+
+    def close(self) -> None:
+        self._finalizer()
+
+
+def _stop(process, conn) -> None:
+    """End a worker: ask it to stop, then terminate it, then kill it, and join it."""
+    try:
+        conn.send(("close",))
+    except (OSError, ValueError):
+        pass
+    process.join(0.5)
+    if process.is_alive():
+        process.terminate()
+        process.join(5.0)
+    if process.is_alive():
+        process.kill()
+        process.join()
+    conn.close()

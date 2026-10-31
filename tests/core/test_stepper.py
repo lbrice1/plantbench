@@ -4,6 +4,10 @@ the same trajectory to within the integrator's tolerance."""
 
 from __future__ import annotations
 
+import dataclasses
+import threading
+import time
+
 import numpy as np
 import pytest
 from _tanks import TANKS_CASE
@@ -13,7 +17,7 @@ from plantbench.cases import load_case
 from plantbench.cases.jacketed_cstr.definition import TEMPERATURE_TUNING
 from plantbench.cases.template import CASE as TEMPLATE
 from plantbench.core import stepper as stp
-from plantbench.core.control import Loop
+from plantbench.core.control import Loop, WallTimeExceeded
 
 RTOL = 1e-5  # the restarts at every step change the solver's path, not the closed loop
 CSTR = load_case("jacketed_cstr")
@@ -151,3 +155,122 @@ def test_a_failed_interval_leaves_the_stepper_where_it_was(monkeypatch):
     with pytest.raises(stp.StepFailed, match="forced"):
         s.step()
     assert s.t == t and np.array_equal(s.x, x)
+
+
+# -- time limits ------------------------------------------------------------------
+
+
+def _stall_stepper(**budgets):
+    from _stall import CASE
+
+    return pb.Stepper(pb.build(CASE, CASE.config()), 1.0, inputs=("stall",), **budgets)
+
+
+def test_a_stepper_with_a_limit_steps_as_one_without():
+    config = CSTR.config("temperature PI", disturbance=FEED, x0={"T": 365.0})
+    alone = pb.Stepper(pb.build(CSTR, config), 0.5, inputs=("Fj",))
+    with pb.Stepper(pb.build(CSTR, config), 0.5, inputs=("Fj",), step_budget=30.0) as limited:
+        for k in range(20):
+            a, b = alone.step({"Fj": 0.3 + 0.01 * k}), limited.step({"Fj": 0.3 + 0.01 * k})
+            assert np.array_equal(a.x, b.x) and a.nfev == b.nfev and a.y == b.y
+        assert limited.spent > 0.0
+        assert limited._worker.process.is_alive()
+    assert not limited._worker.process.is_alive()
+
+
+def test_a_step_stalled_in_native_code_is_stopped_and_the_stepper_invalidated():
+    s = _stall_stepper(step_budget=1.0)
+    s.step({"stall": 0.0})
+    start = time.perf_counter()
+    with pytest.raises(WallTimeExceeded, match="exceeded 1 s"):
+        s.step({"stall": 30.0})
+    assert time.perf_counter() - start < 10.0
+    assert not s._worker.process.is_alive()
+    with pytest.raises(RuntimeError, match="cannot step again"):
+        s.step({"stall": 0.0})
+    assert s.t == 1.0  # where the stalled step began
+    s.close()  # a second close does nothing
+
+
+def test_the_episode_budget_counts_the_steps_only():
+    s = _stall_stepper(episode_budget=1.5)
+    time.sleep(2.0)  # the caller's own time is not the episode's
+    s.step({"stall": 0.0})
+    with pytest.raises(WallTimeExceeded):
+        for _ in range(100):
+            s.step({"stall": 0.05})
+    assert 1.5 <= s.spent < 10.0 and not s._worker.process.is_alive()
+
+
+def test_reset_starts_a_new_episode():
+    s = _stall_stepper(episode_budget=60.0)
+    s.step({"stall": 0.0})
+    s.reset()
+    assert s.spent == 0.0 and s.t == 0.0
+    assert s.step({"stall": 0.0}).x == pytest.approx([1.0])
+    s.close()
+
+
+def test_a_limit_works_from_a_thread_other_than_the_main_one():
+    caught = []
+
+    def run():
+        s = _stall_stepper(step_budget=1.0)
+        try:
+            s.step({"stall": 30.0})
+        except WallTimeExceeded as exc:
+            caught.append(exc)
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    thread.join(30.0)
+    assert not thread.is_alive() and len(caught) == 1
+
+
+def test_a_worker_that_fails_or_stalls_at_its_start_is_reported(monkeypatch):
+    from _stall import CASE, FAIL, SLOW
+
+    setup = pb.build(CASE, CASE.config())
+    monkeypatch.setenv(FAIL, "1")
+    with pytest.raises(ValueError, match="told to fail"):
+        pb.Stepper(setup, 1.0, step_budget=1.0)
+    monkeypatch.delenv(FAIL)
+    monkeypatch.setenv(SLOW, "30")
+    with pytest.raises(WallTimeExceeded, match="start"):
+        pb.Stepper(setup, 1.0, step_budget=1.0, startup_budget=1.0)
+
+
+def test_a_case_that_no_module_holds_cannot_have_a_limit():
+    case = dataclasses.replace(CSTR, title="changed after import")
+    setup = pb.build(case, case.config())
+    with pytest.raises(ValueError, match="cannot be rebuilt in a worker"):
+        pb.Stepper(setup, 0.5, step_budget=1.0)
+    pb.Stepper(setup, 0.5).step()  # without a limit it steps
+
+
+def test_a_setup_not_built_from_its_configuration_cannot_have_a_limit():
+    setup = pb.build(CSTR, CSTR.config())
+    setup = dataclasses.replace(setup, design=dataclasses.replace(setup.design,
+                                                                  x=setup.design.x + 1.0))
+    with pytest.raises(ValueError, match="differs from the setup"):
+        pb.Stepper(setup, 0.5, step_budget=5.0)
+
+
+def test_a_failed_interval_in_the_worker_is_raised_and_the_worker_kept(monkeypatch):
+    s = pb.Stepper(pb.build(CSTR, CSTR.config("temperature PI")), 0.5, step_budget=30.0)
+    s.step()
+    with pytest.raises(KeyError, match="exactly"):
+        s.step({"Fj": 1.0})
+    assert s._worker.process.is_alive()
+    s.close()
+
+
+def test_a_worker_that_dies_is_reported_and_the_stepper_invalidated():
+    s = _stall_stepper(step_budget=30.0)
+    s.step({"stall": 0.0})
+    s._worker.process.kill()
+    s._worker.process.join()
+    with pytest.raises(RuntimeError, match="worker ended (before|during)"):
+        s.step({"stall": 0.0})
+    with pytest.raises(RuntimeError, match="cannot step again"):
+        s.step({"stall": 0.0})

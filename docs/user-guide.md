@@ -169,6 +169,16 @@ The caller owns inputs, the set-points of loops, or both, and each action names 
 
 The action is held over the interval (zero-order hold), and the integration restarts at each breakpoint of the disturbance and the set-point schedules inside it. Each `step` returns a `Step`: the time, the plant state, the inputs, the case's measurements, the signals of the remaining loops and the right-hand-side evaluations the interval took. `step()` without an action holds the nominal one, `stepper.nominal_action()`, which leaves the plant as configured; with nothing owned, a stepped run is the run of `pb.run` to the solver's tolerance. The stepper starts where the configuration starts the run, at `setup.x0`, and `reset()` returns it there. An interval whose integration fails raises `StepFailed` and leaves the stepper where the interval began.
 
+`step_budget` limits the wall-clock seconds of one step, and `episode_budget` those of all the steps since the start or the last `reset()`; the caller's own time between steps does not count. A step that stalls inside LSODA cannot be interrupted from Python, since the solver is compiled and a signal reaches only the main thread of a POSIX process. A stepper with either budget therefore integrates in a worker process of its own, spawned once and kept until `close()` or the end of a `with` block. When a step runs over, the worker is terminated and the step raises `control.WallTimeExceeded`. The stepper is then invalid, and a new one is built to go on. This works from any thread and on any platform:
+
+```python
+with pb.Stepper(setup, dt=0.5, inputs=["Fj"], step_budget=10.0, episode_budget=600.0) as stepper:
+    for k in range(400):
+        obs = stepper.step({"Fj": policy(obs.y)})
+```
+
+The worker builds the plant again from the case's module and the configuration, which takes as long as `pb.build` does, within `startup_budget` seconds if one is given. A case must therefore be importable in a fresh process: a built-in case, an installed one or one defined in an importable module. A case defined in a script, or changed after import, is refused a budget and steps without one. A setup changed after `build` is refused as well, since the worker would step another plant.
+
 ## Linear analysis
 
 ```python
