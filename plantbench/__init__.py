@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version
 
+from plantbench import _provenance
 from plantbench.cases import case, list_cases, load_case, register
 from plantbench.core import case as _case
 from plantbench.core.case import Case, Config, Setup, Trajectory
@@ -46,5 +47,21 @@ def run_ensemble(case: str | Case, configs: list, t_end: float = 1500.0,
     return _case.run_ensemble(_resolve(case), list(configs), t_end, **kwargs)
 
 
+def provenance(case: str | None = None) -> dict:
+    """The record of what a result is made with, as a dataset's manifest holds it.
+
+    `plantbench` is the library's version; `git_commit` and `git_dirty` its commit and
+    whether its code is uncommitted, both None unless it runs from a checkout of its
+    repository (`repo_state`); `python`, `numpy`, `scipy` and `platform` the environment;
+    and `started` the time of the call, in UTC, which a program takes when it starts.
+    With the id of a case that is not built in, `case_source` says where that case comes
+    from (`case_source`); a built-in case is covered by the library's own commit.
+
+        import json, plantbench as pb
+        json.dump(pb.provenance("my_tank"), open("run.json", "w"))
+    """
+    return _provenance.provenance(case)
+
+
 __all__ = ["Case", "Config", "Setup", "Trajectory", "build", "case", "list_cases", "load_case",
-           "register", "run", "run_ensemble", "__version__"]
+           "provenance", "register", "run", "run_ensemble", "__version__"]

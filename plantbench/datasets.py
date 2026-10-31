@@ -35,6 +35,7 @@ from typing import Callable
 import numpy as np
 
 from plantbench import datagen
+from plantbench._provenance import repo_state
 from plantbench.core.spec import PROTOCOL_ID, SPEC_ID, Spec, digest, identifier
 
 TOL = 1e-9  # relative, with an absolute floor of the same size
@@ -133,7 +134,7 @@ def stamp(data_dir: str | Path | None = None) -> dict:
             out["protocol_digest"] = d["protocol_digest"]
         if d["case_source"] is not None:
             out["case_source"] = d["case_source"]
-    state = datagen.repo_state()
+    state = repo_state()
     out.update(commit=state["git_commit"], dirty=state["git_dirty"],
                plantbench=__version__, python=sys.version.split()[0],
                numpy=np.__version__, scipy=scipy.__version__)
@@ -191,7 +192,7 @@ def _named(kind: str, d: str | None) -> str:
 
 def case_source_text(source: dict | None) -> str:
     """Where a case came from, as a line of a results file.  `None`, which
-    `datagen.case_source` gives for a built-in case, reads as built in; the library's
+    `case_source` gives for a built-in case, reads as built in; the library's
     commit on the stamp's own line covers it."""
     if source is None:
         return "case built into plantbench"
