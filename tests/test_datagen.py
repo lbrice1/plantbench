@@ -406,3 +406,12 @@ dt = 5.0
     for r in ra:
         assert np.array_equal(datagen.load_run(a, r["run_id"]).x,
                               datagen.load_run(b, r["run_id"]).x)
+
+
+def test_a_configuration_with_noise_is_recorded_invalid(tmp_path):
+    spec = Spec.from_dict({"study": {"name": "n", "case": "jacketed_cstr"},
+                           "base": {"structure": "temperature PI",
+                                    "noise": {"seed": 0, "std": {"T": 0.5}}},
+                           "run": {"t_end": 10.0, "dt": 5.0}})
+    records = datagen.load_records(datagen.generate(spec, tmp_path / "d", log=_quiet))
+    assert records[0]["status"] == "invalid" and "stepped run" in records[0]["message"]

@@ -59,6 +59,9 @@ class Config:
                      design; instruments and filters start at rest at that state
     hold             input name -> a constant value for the whole run; the loops that write
                      the input are removed, and any cascade primary of a removed loop
+    noise            {"seed": int, "std": {measurement name: standard deviation}}: white
+                     noise on the named measurements at each sample of a stepped run
+                     (`core.stepper`), from a generator of its own; refused by `run`
 
     Every section is empty by default, and a configuration with only a structure named
     is the case's reference plant.  `params` moves the design with the parameters, and
@@ -78,6 +81,7 @@ class Config:
     mismatch: Mapping[str, float] = field(default_factory=dict)
     x0: Mapping[str, float] = field(default_factory=dict)
     hold: Mapping[str, float] = field(default_factory=dict)
+    noise: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         d = _plain(dataclasses.asdict(self))
@@ -105,7 +109,7 @@ class Config:
         return hashlib.sha1(text.encode()).hexdigest()[:16]
 
 
-_LATER_SECTIONS = ("mismatch", "x0", "hold")
+_LATER_SECTIONS = ("mismatch", "x0", "hold", "noise")
 
 
 def _plain(v):
@@ -302,6 +306,7 @@ def build_on(case: Case, design, config: Config) -> Setup:
                             "cannot be held at other values")
         plant = replace(plant, u=replace(plant.u, **moved))
     _check_undisturbed(disturbance, plant.u, config.hold, "held")
+    _check_noise(case, design, config.noise)
     return Setup(case, config, plant, structure, disturbance,
                  nominal=None if plant is design else design,
                  x0=_start(case, design, config.x0), held=held)
@@ -344,6 +349,36 @@ def _check_undisturbed(disturbance, u0, names, participle: str) -> None:
         if changed:
             raise ValueError(f"the disturbance changes the {participle} input(s) {changed} "
                              f"at t = {t:g}")
+
+
+def _check_noise(case: Case, design, noise: Mapping[str, Any]) -> None:
+    """Raise unless `noise` is empty or holds an integer seed and non-negative standard
+    deviations of measurements the case has."""
+    if not noise:
+        return
+    unknown = sorted(set(noise) - {"seed", "std"})
+    if unknown or "std" not in noise:
+        raise KeyError(f"noise is {{'seed': ..., 'std': {{measurement: sigma}}}}, not "
+                       f"{sorted(noise)}")
+    seed = noise.get("seed", 0)
+    if isinstance(seed, bool) or not isinstance(seed, int):
+        raise TypeError(f"the noise seed must be an integer, not {seed!r}")
+    names = set(case.measurements(design))
+    missing = sorted(set(noise["std"]) - names)
+    if missing:
+        raise KeyError(f"no measurements {missing} in case {case.id}; measurements: "
+                       f"{sorted(names)}")
+    negative = sorted(k for k, v in noise["std"].items() if not float(v) >= 0.0)
+    if negative:
+        raise ValueError(f"the noise of {negative} must be a non-negative standard deviation")
+
+
+def check_continuous(config: Config) -> None:
+    """Raise for what a continuous run cannot do: a configuration with measurement noise,
+    which only a stepped run draws."""
+    if config.noise:
+        raise ValueError("measurement noise is drawn at the samples of a stepped run "
+                         "(`plantbench.Stepper`); a continuous run has no samples to draw it at")
 
 
 def _start(case: Case, design, x0: Mapping[str, float]) -> np.ndarray:
@@ -528,6 +563,7 @@ def run(case: Case, config: Config | Mapping, t_end: float, n_points: int | None
     `control.integrate`.
     """
     setup = build(case, config)
+    check_continuous(setup.config)
     if n_points is None:
         n_points = 1200 if dt is None else int(round(t_end / dt)) + 1
     measurements = case.measurements(setup.design)
@@ -566,6 +602,8 @@ def run_setups(setups: list[Setup], t_end: float, n_points: int | None = None,
     the tolerance, not to the last bit.  `wall_budget` applies to each ensemble."""
     from .ensemble import integrate_ensemble
 
+    for s in setups:
+        check_continuous(s.config)
     if n_points is None:
         n_points = 1200 if dt is None else int(round(t_end / dt)) + 1
     groups: dict[tuple, list[int]] = {}
@@ -616,6 +654,7 @@ def run_ensemble(case: Case, configs: list, t_end: float, size: int | None = Non
     for k, config in enumerate(configs):
         try:
             config = case.validate(config)
+            check_continuous(config)
             key = design_key(config)
             if key not in designs:
                 designs[key] = case.make_design(config)

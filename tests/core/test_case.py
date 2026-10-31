@@ -273,3 +273,9 @@ def test_a_malformed_configured_sequence_is_refused(case, change, error):
     spec = {k: v for k, v in {**SEQUENCE, **change}.items() if v is not None}
     with pytest.raises(error):
         cs.build(case, case.config(disturbance=spec))
+
+
+def test_noise_enters_the_key_only_when_used():
+    noisy = Config("PI", noise={"seed": 1, "std": {"x": 0.1}})
+    assert noisy.key() != Config("PI").key() and "noise" not in Config("PI").to_dict()
+    assert Config.from_dict(noisy.to_dict()) == noisy

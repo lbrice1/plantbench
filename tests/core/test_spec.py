@@ -23,6 +23,8 @@ SPEC = {
     ("mismatch.reactor.U", ["mismatch", "reactor.U"]),
     ("x0.T", ["x0", "T"]),
     ("hold.Fj", ["hold", "Fj"]),
+    ("noise.seed", ["noise", "seed"]),
+    ("noise.std.tray 17 T", ["noise", "std", "tray 17 T"]),
     ("instruments.reactor C_A.deadtime", ["instruments", "reactor C_A", "deadtime"]),
     ("disturbance", ["disturbance"]),
     ("options.network", ["options", "network"]),
