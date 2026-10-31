@@ -230,3 +230,46 @@ def test_each_member_of_an_ensemble_starts_where_it_says():
         alone = cs.run(TANKS_CASE, config, t_end=100.0, dt=1.0)
         assert res.trajectory.x[0, 0] == pytest.approx(config.x0["h1"], rel=1e-12)
         assert np.allclose(res.trajectory.x, alone.x, rtol=1e-4, atol=1e-6)
+
+
+# -- disturbance sequences --------------------------------------------------------
+
+SEQUENCE = {"name": "sequence", "field": "d", "level": "value", "times": [10.0, 50.0],
+            "levels": [1.0, -0.5]}
+RANDOM = {"name": "random_sequence", "of": "step", "field": "d", "level": "value", "seed": 4,
+          "low": -0.2,
+          "high": 0.2, "dwell": [10.0, 30.0], "start": 5.0, "end": 200.0}
+
+
+def test_a_configured_sequence_is_a_sequence_of_its_parts(case):
+    s = cs.build(case, case.config(disturbance=SEQUENCE))
+    u0 = s.design.u
+    assert [s.disturbance(t, u0).d for t in (5.0, 10.0, 60.0)] == [0.0, 1.0, -0.5]
+    assert ctl.breakpoints_of(s.disturbance, s.structure) == (10.0, 50.0)
+
+
+def test_a_random_sequence_is_reproducible_from_its_configuration(case):
+    config = case.config(disturbance=RANDOM)
+    a = cs.run(case, config, t_end=200.0, dt=1.0)
+    b = cs.run(case, Config.from_dict(config.to_dict()), t_end=200.0, dt=1.0)
+    assert np.array_equal(a.x, b.x)
+    s = cs.build(case, config)
+    assert s.disturbance.times[0] == 5.0 and len(s.disturbance.levels) >= 6
+    assert all(abs(s.disturbance(t, s.design.u).d) <= 0.2 for t in np.arange(0.0, 200.0, 1.0))
+    assert not np.allclose(a.x, a.x[0, 0])  # the plant moves under it
+    other = case.config(disturbance={**RANDOM, "seed": 5})
+    assert other.key() != config.key()
+    assert cs.build(case, other).disturbance.levels != s.disturbance.levels
+
+
+@pytest.mark.parametrize("change, error", [
+    ({"of": "nope"}, KeyError),
+    ({"t": 3.0}, ValueError),
+    ({"value": 3.0}, ValueError),
+    ({"levels": [1.0]}, ValueError),
+    ({"times": None}, KeyError),
+])
+def test_a_malformed_configured_sequence_is_refused(case, change, error):
+    spec = {k: v for k, v in {**SEQUENCE, **change}.items() if v is not None}
+    with pytest.raises(error):
+        cs.build(case, case.config(disturbance=spec))

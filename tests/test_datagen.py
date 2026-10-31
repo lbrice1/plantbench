@@ -375,3 +375,34 @@ def test_starts_and_holds_give_in_a_dataset_the_runs_of_run(tmp_path):
         alone = pb.run(CASE, r["config"], t_end=30.0, dt=1.0)
         assert np.array_equal(stored.x, alone.x)
         assert stored.state("T")[0] == pytest.approx(r["config"]["x0"]["T"], rel=1e-12)
+
+
+def test_a_seed_sweep_of_random_sequences_is_the_same_dataset_twice(tmp_path):
+    """rrl's `sequence` family as a specification: random feed temperature changes from a
+    seed swept in [sweep]; a second generation records the same runs, to the bit."""
+    (tmp_path / "s.toml").write_text('''
+[study]
+name = "seq"
+case = "jacketed_cstr"
+
+[base]
+structure = "temperature PI"
+disturbance = {name = "random_sequence", of = "feed_temperature", level = "change", low = -6.0, high = 7.0, dwell = [50.0, 250.0], start = 20.0, end = 400.0}
+
+[sweep]
+"disturbance.seed" = [0, 1, 2]
+
+[run]
+t_end = 400.0
+dt = 5.0
+''')
+    spec = Spec.load(tmp_path / "s.toml")
+    a = datagen.generate(spec, tmp_path / "a", log=_quiet)
+    b = datagen.generate(spec, tmp_path / "b", log=_quiet)
+    ra, rb = datagen.load_records(a), datagen.load_records(b)
+    assert [r["status"] for r in ra] == ["ok"] * 3
+    assert len({r["run_id"] for r in ra}) == 3
+    assert [r["run_id"] for r in ra] == [r["run_id"] for r in rb]
+    for r in ra:
+        assert np.array_equal(datagen.load_run(a, r["run_id"]).x,
+                              datagen.load_run(b, r["run_id"]).x)
