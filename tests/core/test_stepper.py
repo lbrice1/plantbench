@@ -274,3 +274,90 @@ def test_a_worker_that_dies_is_reported_and_the_stepper_invalidated():
         s.step({"stall": 0.0})
     with pytest.raises(RuntimeError, match="cannot step again"):
         s.step({"stall": 0.0})
+
+
+# -- measurement noise ------------------------------------------------------------
+
+NOISE = {"seed": 3, "std": {"T": 0.5}}
+
+
+def _measured(config, steps=20, **owned):
+    s = pb.Stepper(pb.build(CSTR, config), 0.5, **owned)
+    out = [s.observe()]
+    out += [s.step() for _ in range(steps)]
+    return s, out
+
+
+def test_noise_is_drawn_on_the_measurement_and_kept_out_of_the_plant():
+    base = CSTR.config("temperature PI", disturbance=FEED)
+    _, clean = _measured(base)
+    _, noisy = _measured(CSTR.config("temperature PI", disturbance=FEED, noise=NOISE))
+    for a, b in zip(clean, noisy):
+        assert np.array_equal(a.x, b.x) and a.y == b.y_true and a.c == b.c
+        assert b.y["C_A"] == b.y_true["C_A"] and b.y["T"] != b.y_true["T"]
+
+
+def test_the_noise_has_its_standard_deviation():
+    case = TEMPLATE
+    s = pb.Stepper(pb.build(case, case.config(noise={"seed": 0, "std": {"level": 0.2}})), 1.0)
+    e = np.array([(lambda st: st.y["level"] - st.y_true["level"])(s.step()) for _ in range(2000)])
+    assert abs(e.mean()) < 4 * 0.2 / np.sqrt(e.size)
+    assert e.std() == pytest.approx(0.2, rel=0.1)
+
+
+def test_noise_is_reproducible_from_its_seed_and_reset():
+    def errors(stepper, n=10):
+        return [(lambda st: st.y["T"] - st.y_true["T"])(stepper.step()) for _ in range(n)]
+
+    config = CSTR.config("temperature PI", noise=NOISE)
+    s = pb.Stepper(pb.build(CSTR, config), 0.5)
+    first = [s.observe().y["T"] - s.observe().y_true["T"], *errors(s)]
+    s.reset()
+    assert [s.observe().y["T"] - s.observe().y_true["T"], *errors(s)] == first
+    other = pb.Stepper(pb.build(CSTR, CSTR.config("temperature PI", noise=NOISE)), 0.5)
+    assert errors(other) == first[1:]
+    s.reset(noise_seed=4)
+    assert errors(s) != first[1:]
+
+
+def test_the_noise_seed_and_the_scenario_seed_are_independent():
+    rand = {"name": "random_sequence", "of": "feed_temperature", "level": "change",
+            "low": -5.0, "high": 5.0, "dwell": [2.0, 4.0], "start": 1.0, "end": 10.0}
+
+    def run(scenario_seed, noise_seed):
+        _, out = _measured(CSTR.config("temperature PI", disturbance={**rand, "seed": scenario_seed},
+                                       noise={"seed": noise_seed, "std": {"T": 0.5}}))
+        return (np.array([o.x for o in out]),
+                [o.y["T"] - o.y_true["T"] for o in out])
+
+    x, e = run(1, 1)
+    x_noise, e_noise = run(1, 2)
+    x_scenario, e_scenario = run(2, 1)
+    assert np.array_equal(x, x_noise) and e != e_noise
+    assert not np.array_equal(x, x_scenario) and e == e_scenario
+
+
+def test_observing_again_draws_nothing_new():
+    s = pb.Stepper(pb.build(CSTR, CSTR.config("temperature PI", noise=NOISE)), 0.5)
+    s.step()
+    assert s.observe().y == s.observe().y
+
+
+def test_a_continuous_run_refuses_noise(tmp_path):
+    config = CSTR.config("temperature PI", noise=NOISE)
+    with pytest.raises(ValueError, match="stepped run"):
+        pb.run(CSTR, config, t_end=10.0)
+    results = pb.run_ensemble(CSTR, [config], t_end=10.0)
+    assert isinstance(results[0].error, ValueError)
+
+
+@pytest.mark.parametrize("noise, error", [
+    ({"seed": 1, "std": {"nope": 0.1}}, KeyError),
+    ({"seed": 1, "std": {"T": -0.1}}, ValueError),
+    ({"seed": 1.5, "std": {"T": 0.1}}, TypeError),
+    ({"seed": 1}, KeyError),
+    ({"std": {"T": 0.1}, "sigma": 1}, KeyError),
+])
+def test_malformed_noise_is_refused(noise, error):
+    with pytest.raises(error):
+        pb.build(CSTR, CSTR.config("temperature PI", noise=noise))

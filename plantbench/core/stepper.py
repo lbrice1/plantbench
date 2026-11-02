@@ -55,8 +55,10 @@ class StepFailed(RuntimeError):
 @dataclass
 class Step:
     """The plant at the end of an interval: time, plant state, inputs (as `control.
-    input_values` flattens them), named measurements, the signals of the remaining loops
-    (`control.apply`), and the right-hand-side evaluations the interval took."""
+    input_values` flattens them), named measurements as a sampled instrument reports them,
+    the signals of the remaining loops (`control.apply`), the right-hand-side evaluations
+    the interval took, and the true values of the measurements.  `y` and `y_true` differ
+    only under a configuration's `noise`."""
 
     t: float
     x: np.ndarray
@@ -64,6 +66,7 @@ class Step:
     y: dict[str, float]
     c: dict[str, float]
     nfev: int
+    y_true: dict[str, float]
 
 
 class Stepper:
@@ -84,6 +87,11 @@ class Stepper:
     `control.WallTimeExceeded` after the worker has been terminated; the stepper cannot be
     used again.  `startup_budget` limits the worker's start, which builds the plant again;
     None waits for it.  The setup must be one `build` makes from its configuration.
+
+    A configuration's `noise` adds to each named measurement, once per sample (the start
+    and the end of each step), a draw of zero mean and the given standard deviation, from
+    a generator seeded by the section's `seed` and used for nothing else.  The loops that
+    remain see the true values, as `run`'s do; `Step.y_true` holds them beside `Step.y`.
     """
 
     def __init__(self, setup: Setup, dt: float, inputs=(), setpoints=(),
@@ -108,6 +116,9 @@ class Stepper:
         self._owned_loops = self._check_setpoints()
         self.breakpoints = ctl.breakpoints_of(self.disturbance, self.structure)
         self.measurements = setup.case.measurements(self.design)
+        noise = setup.config.noise
+        self.noise_std = {k: float(noise["std"][k]) for k in sorted(noise.get("std", {}))}
+        self.noise_seed = int(noise.get("seed", 0))
         self.step_budget, self.episode_budget = step_budget, episode_budget
         self._invalid: str | None = None
         self._worker: _Worker | None = None
@@ -143,14 +154,25 @@ class Stepper:
 
     # ------------------------------------------------------------------------------
 
-    def reset(self) -> None:
-        """Back to the start of the run, at time 0, with the nominal action."""
+    def reset(self, noise_seed: int | None = None) -> None:
+        """Back to the start of the run, at time 0, with the nominal action, and the noise
+        generator seeded again: by the configuration's seed, or by `noise_seed`, so that an
+        episode is reproducible from its seed and episodes may differ in their noise."""
         x0 = np.asarray(self.setup.x0, dtype=float)
         self._y = np.concatenate([x0, ctl.initial_augmented(self.structure, self.design, x0)])
         self.t = 0.0
         self.nfev = 0
         self.spent = 0.0  # wall-clock seconds of the steps since the start
         self.action = self.nominal_action()
+        self._rng = np.random.default_rng(self.noise_seed if noise_seed is None else noise_seed)
+        self._noise = self._draw()
+
+    def _draw(self) -> dict[str, float]:
+        """The noise of one sample, one draw per noisy measurement in name order."""
+        if not self.noise_std:
+            return {}
+        z = self._rng.standard_normal(len(self.noise_std))
+        return {k: s * float(v) for (k, s), v in zip(self.noise_std.items(), z)}
 
     @property
     def x(self) -> np.ndarray:
@@ -214,6 +236,7 @@ class Stepper:
             self.spent += time.perf_counter() - start
         self._y, self.t, self.action = y, self.t + self.dt, action
         self.nfev += nfev
+        self._noise = self._draw()
         return self._observe(nfev)
 
     def _advance(self, y: np.ndarray, t: float, action: dict) -> tuple[np.ndarray, int]:
@@ -266,7 +289,8 @@ class Stepper:
         self.close()
 
     def observe(self) -> Step:
-        """The plant now, under the action last held (the nominal one before any step)."""
+        """The plant now, under the action last held (the nominal one before any step),
+        with the noise drawn for this sample: observing again draws nothing new."""
         return self._observe(0)
 
     def _observe(self, nfev: int) -> Step:
@@ -279,7 +303,9 @@ class Stepper:
         values.update({name: float(f(u))
                        for name, f in getattr(self.design, "derived", {}).items()})
         y = {name: float(f(x, u, self.design.pp)) for name, f in self.measurements.items()}
-        return Step(self.t, x, values, y, {k: float(v) for k, v in signals.items()}, nfev)
+        measured = {name: v + self._noise.get(name, 0.0) for name, v in y.items()}
+        return Step(self.t, x, values, measured, {k: float(v) for k, v in signals.items()},
+                    nfev, y)
 
 
 # ------------------------------------------------------------------------------------

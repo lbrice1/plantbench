@@ -53,7 +53,15 @@ from plantbench import cases
 from plantbench._provenance import case_source, provenance, repo_state  # noqa: F401
 from plantbench.cases import load_case
 from plantbench.core import control as ctl
-from plantbench.core.case import Config, Trajectory, build_on, design_key, features_of, run_setups
+from plantbench.core.case import (
+    Config,
+    Trajectory,
+    build_on,
+    check_continuous,
+    design_key,
+    features_of,
+    run_setups,
+)
 from plantbench.core.case import build as build_setup
 from plantbench.core.case import run as run_case
 from plantbench.core.spec import Spec, expand
@@ -108,6 +116,7 @@ def _setup(case, config: dict, run: dict, build) -> tuple[dict, Any]:
     try:
         cfg = case.validate(config)
         record["config"] = cfg.to_dict()
+        check_continuous(cfg)
         setup = build(case, cfg)
     except (ValueError, KeyError, TypeError) as exc:
         record.update(status="invalid", message=f"{type(exc).__name__}: {exc}")
