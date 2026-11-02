@@ -16,7 +16,8 @@ from functools import lru_cache
 from plantbench.core import control as ctl
 from plantbench.core import disturbances as dist
 from plantbench.core.case import Case, Config, override
-from plantbench.core.casekit import parameter_mismatch
+from plantbench.core.casekit import limits_from, parameter_mismatch
+from plantbench.core.limits import CHOICE
 
 from . import economics as ec
 from . import hen, integrated, plant, streams
@@ -132,6 +133,18 @@ def measurements(design) -> dict:
     return out
 
 
+def limits(design) -> dict:
+    """The spans and limits of the measurements (`scenarios.LIMITS`), the tray
+    temperature's at the plant's column pressure (`scenarios.TRAY_SPANS`); `feed T` in
+    the heat-integrated plants only, which measure it."""
+    names = measurements(design)
+    table = {k: v for k, v in sc.LIMITS.items() if k in names}
+    span = sc.TRAY_SPANS.get(_pressure(design))
+    if span is not None:
+        table[f"tray {sc.TEMPERATURE_TRAY} T"] = {"span": span}
+    return limits_from(table, CHOICE)
+
+
 def economics(setup) -> dict:
     """Operating profit and global warming potential at the design operating point.
 
@@ -243,4 +256,5 @@ CASE = Case(
     state_names=state_names,
     features={"economics": economics},
     apply_mismatch=apply_mismatch,
+    limits=limits,
 )

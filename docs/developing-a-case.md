@@ -108,6 +108,7 @@ An id is refused if it breaks the naming convention, names a built-in case, or i
 | `state_measurement` | a measurement reading one state, by index or by its name in a layout |
 | `cached_design` | caches a slow design solve per worker process, as `jacketed_cstr` does |
 | `parameter_mismatch` | the `apply_mismatch` of a design dataclass whose model reads the parameters it is passed |
+| `limits_from` | a case's `limits` from a table of plain data, spans and limits per measurement on one basis, `source` or `choice` |
 | `fixed_point_residual` | the largest `rhs` at the design point and the states where it is largest, for a design that is not yet a steady state |
 
 ```python
@@ -126,7 +127,7 @@ The usual way to write one function for one state and for a batch is to index th
 
 ## Testing
 
-The contract is shipped with the library as `plantbench.contract.CHECKS`, the same checks the library runs on its own cases: the id, a fixed point under every structure, the reference structure, state names, finite measurements, the configuration round trip, ideal instruments, a short run at rest and the generic disturbances. The generated `tests/test_contract.py` runs them under pytest:
+The contract is shipped with the library as `plantbench.contract.CHECKS`, the same checks the library runs on its own cases: the id, a fixed point under every structure, the reference structure, state names, finite measurements, limits that hold at the design point, the configuration round trip, ideal instruments, a short run at rest and the generic disturbances. The generated `tests/test_contract.py` runs them under pytest:
 
 ```python
 @pytest.mark.parametrize("check", contract.CHECKS, ids=lambda c: c.__name__)

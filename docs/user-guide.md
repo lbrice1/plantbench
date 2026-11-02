@@ -192,6 +192,39 @@ with pb.Stepper(setup, dt=0.5, inputs=["Fj"], step_budget=10.0, episode_budget=6
 
 The worker builds the plant again from the case's module and the configuration, which takes as long as `pb.build` does, within `startup_budget` seconds if one is given. A case must therefore be importable in a fresh process: a built-in case, an installed one or one defined in an importable module. A case defined in a script, or changed after import, is refused a budget and steps without one. A setup changed after `build` is refused as well, since the worker would step another plant.
 
+## Limits and outcomes
+
+A case declares the span, the alarm and trip limits, and the open-loop steady states of the measurements it bounds, `case.limits(design)`, a `core.limits.Limits` per measurement name. Each number is tagged as the case cards tag theirs: `"source"` when the case's reference gives it, `"choice"` when the case decides it, with the reason in `why`:
+
+```python
+case = pb.load_case("jacketed_cstr")
+lim = case.limits(pb.build(case).design)
+lim["T"].trip_hi            # Limit(value=372.0, basis='choice', why='10 K above the design point ...')
+lim["T"].steady_states      # (338.22..., 362.40..., 377.08...), low-temperature branch first
+```
+
+The spans are those the loops express their signals in percent of (`pv_range`), from one definition. The steady states are those of the plant at the design's inputs, so a `hold` or a `mismatch` moves them. The case cards list every limit.
+
+Whether a limit ends a run is a decision of the study, so it is data as well. A `Rule` names an outcome, a measurement, a side of a level and a dwell, the time the measurement must stay beyond the level without a break. `limit_rules` makes rules from a case's limits, and a `Monitor` applies them to the samples of a run:
+
+```python
+from plantbench.core.limits import Monitor, Rule, check, limit_rules
+
+rules = [*limit_rules(lim, "trip"),                                   # T above 372 K
+         Rule("extinction", "T", "below", lim["T"].alarm_lo.value, dwell=20.0)]
+monitor = Monitor(rules)
+stepper = pb.Stepper(setup, dt=0.5, inputs=["Fj"], extrema=["T"])
+obs = stepper.observe()
+monitor.step(obs)
+while monitor.first is None and obs.t < 200.0:
+    obs = stepper.step({"Fj": policy(obs.y)})
+    monitor.step(obs)
+monitor.first               # Violation(rule, t, value, since, sampled), or None
+check(trajectory, rules)    # the same over the grid of a `Trajectory`
+```
+
+The monitor reads true values, `Step.y_true`, not the measured ones that a configuration's `noise` perturbs. It records the first violation of each rule in `violations` and the earliest in `first`. The time beyond a level is counted from the last sample within it, since the crossing lies after that sample, so a sampled check reports a dwell no later than the plant reaches it. A step that reports the extremes of its interval (`extrema`) adds two things: an interval whose extremes show the measurement back within the level restarts the count at the interval's start, and a rule without a dwell is met between samples when an extreme lies beyond its level while the samples do not. Such a violation has `sampled = False`. It is an estimate made on the refined dense output, and the crossing lies somewhere between `since` and `t`.
+
 ## Linear analysis
 
 ```python

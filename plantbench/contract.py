@@ -109,6 +109,28 @@ def measurements_are_finite_at_the_design_point(case: Case) -> None:
     _require(not bad, f"measurements not finite at the design point: {bad}")
 
 
+def limits_hold_at_the_design_point(case: Case) -> None:
+    """The limits name measurements the case has, and the design point lies within every
+    span, alarm and trip limit they declare; measurements that give values at the
+    open-loop steady states give one per steady state, the same number for each.  A case
+    without limits passes."""
+    d = build(case).design
+    limits, measures = case.limits(d), case.measurements(d)
+    unknown = sorted(set(limits) - set(measures))
+    _require(not unknown, f"limits name no measurements of the case: {unknown}")
+    for name, lim in limits.items():
+        value = float(measures[name](d.x, d.u, d.pp))
+        if lim.span is not None:
+            _require(lim.span.lo <= value <= lim.span.hi,
+                     f"{name!r} is {value:g} at the design point, outside its span "
+                     f"{lim.span.lo:g} to {lim.span.hi:g}")
+        for kind in ("alarm", "trip"):
+            _require(lim.within(value, kind),
+                     f"{name!r} is {value:g} at the design point, beyond its {kind} limits")
+    counts = {len(lim.steady_states) for lim in limits.values() if lim.steady_states}
+    _require(len(counts) <= 1, f"measurements give {sorted(counts)} steady states")
+
+
 def configuration_round_trips(case: Case) -> None:
     """The reference configuration survives conversion to plain data and back."""
     c = case.config()
@@ -195,6 +217,7 @@ CHECKS = (
     reference_structure_is_available,
     state_names_name_every_state_once,
     measurements_are_finite_at_the_design_point,
+    limits_hold_at_the_design_point,
     configuration_round_trips,
     ideal_instruments_add_nothing,
     a_short_run_stays_at_rest,

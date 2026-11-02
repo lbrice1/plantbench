@@ -169,6 +169,8 @@ structure = "recovery cascade"
 
 Under crr, `stage 1 temperature` is the temperature of the mixing point.
 
+The limits (`case.limits(design)`) give the controller PVs their spans in the HYSYS case [H], which the loops' signals in percent are expressed in: `TK-100 temperature` −50 to 0 °C, the levels 0 to 100 %, `overhead pressure` 500 to 4000 kPa, `methane in NGL` 0 to 100 mol % and, under crr, `recycle ratio` 0 to 1; and `ethane recovery` 0 to 1, the whole of a fraction [choice]. Neither reference declares alarm or trip limits.
+
 `ethane recovery` is inferred, as in the plant, from the NGL flow transmitter, the ethane in the NGL and the feed: FT_NGL · x_B,C2 / (F_feed · z_C2). `NGL flow` and `recycle ratio` are read through their transmitters.
 
 ## Reference results

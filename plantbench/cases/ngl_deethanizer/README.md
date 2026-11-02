@@ -145,6 +145,8 @@ The controller PVs, in the HYSYS case's units:
 - `ethane in LPG` (mole fraction);
 - the 30 stage temperatures, `stage 1 temperature` to `stage 30 temperature` (°C), of which TIC-101 reads stage 4 and TIC-100 stage 28.
 
+The limits (`case.limits(design)`) give the controller PVs their spans in the HYSYS case [H], which the loops' signals in percent are expressed in: `feed temperature` 0 to 80 °C, `overhead pressure` 0 to 3500 kPa, the levels 0 to 100 %, `stage 4 temperature` 0 to 200 °C, `stage 28 temperature` −5 to 140 °C and `ethane in LPG` 0 to 1. The HYSYS case declares no alarm or trip limits.
+
 The products:
 
 - `distillate flow` and `LPG flow` (kmol/h);
