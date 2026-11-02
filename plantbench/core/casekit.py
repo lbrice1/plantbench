@@ -5,6 +5,7 @@
     measured             a measure's value, for one state or a batch
     cached_design        cache a slow design solve per worker process
     parameter_mismatch   the plant of a design under changed parameters, for `mismatch`
+    limits_from          a case's limits (`core.limits`) from a table of plain data
     fixed_point_residual how far the design point is from a steady state, and where
 
 None of these is required; a case that writes the same thing by hand keeps the contract
@@ -22,6 +23,7 @@ import numpy as np
 from plantbench.backend import namespace, to_host
 
 from .case import override
+from .limits import Limit, Limits, Span
 
 
 class StateLayout:
@@ -160,6 +162,32 @@ def parameter_mismatch(design, overrides: Mapping[str, float]):
     side and measures read the parameters they are passed, rather than parameters held in
     an object built from them."""
     return dataclasses.replace(design, pp=override(design.pp, overrides))
+
+
+def limits_from(table: Mapping[str, Mapping[str, Sequence]], basis: str,
+                steady_states: Mapping[str, Sequence[float]] | None = None
+                ) -> dict[str, Limits]:
+    """`Limits` per measurement from plain data on one basis, "source" or "choice":
+
+        {"T": {"span": (340.0, 385.0, "why"), "trip_hi": (372.0, "why")}}
+
+    A span is (lo, hi) or (lo, hi, why), a limit, "alarm_lo", "alarm_hi", "trip_lo" or
+    "trip_hi", is (value,) or (value, why).  `steady_states` gives a measurement's values
+    at the open-loop steady states, which may be all it declares."""
+    steady_states = steady_states or {}
+    out = {}
+    for name in [*table, *(k for k in steady_states if k not in table)]:
+        entry = dict(table.get(name, {}))
+        span = entry.pop("span", None)
+        unknown = set(entry) - {"alarm_lo", "alarm_hi", "trip_lo", "trip_hi"}
+        if unknown:
+            raise KeyError(f"{name}: no limits {sorted(unknown)}")
+        out[name] = Limits(
+            span=None if span is None else Span(float(span[0]), float(span[1]), basis,
+                                                *span[2:]),
+            **{k: Limit(float(v[0]), basis, *v[1:]) for k, v in entry.items()},
+            steady_states=tuple(steady_states.get(name, ())))
+    return out
 
 
 def fixed_point_residual(design, names: Sequence[str] | None = None,

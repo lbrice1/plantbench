@@ -20,7 +20,8 @@ import numpy as np
 
 from plantbench.core import control as ctl
 from plantbench.core.case import Case, Config, override
-from plantbench.core.casekit import cached_design, measured
+from plantbench.core.casekit import cached_design, limits_from, measured
+from plantbench.core.limits import SOURCE
 
 from .model import Design, ethane_recovery, solve_design
 from .parameters import DeethanizerParameters, parameters
@@ -144,6 +145,14 @@ TUNING = {
 COMPOSITION = dict(Kc=-250.0, tau_I=5.0, lo=-5.0, hi=140.0, pv_range=(0.0, 1.0))
 
 
+def limits(design: Design) -> dict:
+    """The spans of the measurements the HYSYS case's controllers read: their PV spans
+    [H] (`hysys_reference.json`, controllers)."""
+    table = {name: {"span": (*tuning["pv_range"], "the HYSYS controller's PV span")}
+             for name, tuning in {**TUNING, "ethane in LPG": COMPOSITION}.items()}
+    return limits_from(table, SOURCE)
+
+
 def _loop(m: dict, name: str, mv: str) -> ctl.Loop:
     return ctl.Loop(name, m[name], mv, **TUNING[name])
 
@@ -220,4 +229,5 @@ CASE = Case(
     disturbances=DISTURBANCES,
     measurements=measurements,
     state_names=lambda design: design.plant.state_names(),
+    limits=limits,
 )

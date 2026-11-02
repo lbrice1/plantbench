@@ -19,11 +19,20 @@ oscillation.  They remain available through the `tuning` section of a configurat
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from plantbench.core import control as ctl
 from plantbench.core import disturbances as dist
 from plantbench.core.case import Case, Config, override
-from plantbench.core.casekit import cached_design, parameter_mismatch, state_measurement
+from plantbench.core.casekit import (
+    cached_design,
+    limits_from,
+    parameter_mismatch,
+    state_measurement,
+)
 from plantbench.core.control import Loop
+from plantbench.core.limits import CHOICE
+from plantbench.units import cstr
 from plantbench.units.parameters import ReactorParameters
 
 from .model import LAYOUT, Design, solve_design
@@ -50,20 +59,21 @@ m_Tj = state_measurement("Tj", LAYOUT)
 # here, and a gain of -10 falls below 0.1.
 TEMPERATURE_TUNING = {"Kc": -1.0, "tau_I": 20.0}  # m3/min per K, min
 COMPOSITION_TUNING = {"Kc": -3.0, "tau_I": 20.0}  # K per kmol/m3, min
-# The measurement spans, `reactor_separator_recycle`'s for the same reactor [choice].
-PV_RANGES = {"reactor T": (340.0, 385.0), "reactor C_A": (0.0, 5.0)}  # K, kmol/m3
+# The measurement spans and limits of the reactor, shared with `reactor_separator_recycle`
+# (`units.cstr.LIMITS`) [choice].
+SPANS = {name: entry["span"][:2] for name, entry in cstr.LIMITS.items()}  # K, kmol/m3
 
 
 def temperature_loop() -> Loop:
     """Reactor temperature on the coolant flow: the loop that stabilizes the reactor."""
     return Loop("reactor T", m_T, "Fj", **TEMPERATURE_TUNING, lo=0.05, hi=6.0,
-                pv_range=PV_RANGES["reactor T"])
+                pv_range=SPANS["T"])
 
 
 def composition_loop() -> Loop:
     """Reactor concentration on the temperature set-point, the reference cascade."""
     return Loop("reactor C_A", m_CA, "sp:reactor T", **COMPOSITION_TUNING, lo=340.0, hi=385.0,
-                pv_range=PV_RANGES["reactor C_A"])
+                pv_range=SPANS["C_A"])
 
 
 STRUCTURES = {
@@ -89,6 +99,18 @@ def feed_temperature(design, config: Config, value: float | None = None,
     return dist.step("T0", value=design.u.T0 + change if value is None else value, t=t)
 
 
+def limits(design: Design) -> dict:
+    """The reactor's spans and limits, and the open-loop steady states of the plant at
+    the design's inputs, which a `hold` or a `mismatch` may have moved, low-temperature
+    branch first."""
+    u = design.u
+    p = replace(design.pp, F0=u.F0, CA0=u.CA0, T0=u.T0, Fj=u.Fj)
+    states = cstr.steady_states(p)
+    return limits_from(cstr.LIMITS, CHOICE,
+                       steady_states={name: [float(x[k]) for x in states]
+                                      for k, name in enumerate(LAYOUT.names())})
+
+
 CASE = Case(
     id="jacketed_cstr",
     title="Non-isothermal CSTR with a cooling jacket",
@@ -108,4 +130,5 @@ CASE = Case(
     measurements=lambda design: {"C_A": m_CA, "T": m_T, "Tj": m_Tj},
     state_names=lambda design: LAYOUT.names(),
     apply_mismatch=parameter_mismatch,
+    limits=limits,
 )

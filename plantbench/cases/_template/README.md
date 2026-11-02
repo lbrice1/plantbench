@@ -44,6 +44,8 @@ The generic `step` and `ramp` on any input. List named disturbances with their a
 
 `level` (m) and `outflow` (m3/min).
 
+The limits, `case.limits(design)`: `level` spans 0 to twice the design level and alarms outside 5 % to 95 % of its span [choice]. Tag each limit [source] if the case's reference gives it and [choice] otherwise, and say what it rests on.
+
 ## Reference results
 
 The values the case reproduces, each with its source and tolerance. None for the tank.

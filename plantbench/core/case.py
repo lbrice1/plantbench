@@ -27,6 +27,7 @@ import numpy as np
 from . import control as ctl
 from . import disturbances as dist
 from .instruments import Actuator, Instrument
+from .limits import Limits
 
 Measurement = Callable[[np.ndarray, Any, Any], float]
 # A feature is computed from the configured plant at its design point, not from the run, so
@@ -155,6 +156,11 @@ def _override_one(obj, parts: list[str], value, path: str):
 # ------------------------------------------------------------------------------------
 
 
+def _no_limits(design) -> dict:
+    """The limits of a case that declares none."""
+    return {}
+
+
 @dataclass(frozen=True)
 class Case:
     """What a test problem supplies to the library.
@@ -177,6 +183,9 @@ class Case:
                            parameters overridden and its state and inputs kept, for the
                            `mismatch` section (`casekit.parameter_mismatch`); None, the
                            default, when the case does not support one
+    limits                 design -> {measurement: Limits}, the spans, alarm and trip
+                           limits and open-loop steady states of the measurements the
+                           case bounds (`core.limits`); none by default
     """
 
     id: str
@@ -192,6 +201,7 @@ class Case:
     state_names: Callable[[Any], list[str]]
     features: Mapping[str, Feature] = field(default_factory=dict)
     apply_mismatch: Callable[[Any, Mapping[str, float]], Any] | None = None
+    limits: Callable[[Any], Mapping[str, Limits]] = _no_limits
 
     def config(self, structure: str | None = None, **sections) -> Config:
         """A configuration of this case, with its options defaulted and checked."""

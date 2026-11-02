@@ -51,6 +51,15 @@ The tunings are chosen for damping. The least damping ratio is 0.274 under `temp
 
 `C_A`, `T`, `Tj`.
 
+The limits (`case.limits(design)`) are those of the reactor in `reactor_separator_recycle`, from one table (`plantbench/units/cstr.py`, `LIMITS`). The reference gives no transmitter ranges and no limits, so each is a [choice]:
+
+| Measurement | Span | Alarm | Trip | Basis |
+|---|---|---|---|---|
+| `T` | 340 to 385 K | below 350 K | above 372 K | the span is the range the composition primary moves the set-point in; the trip lies 10 K above the design point and 5 K below the high-temperature steady state; below the alarm the reactor is on its way to the low-temperature steady state, where it loses its production |
+| `C_A` | 0 to 5 kmol/m³ | | | up to the feed concentration |
+
+The limits also give the three open-loop steady states of the plant at the design's inputs for each measurement, low-temperature branch first: 338.22, 362.40 and 377.08 K at the reference inputs.
+
 ## Reference results
 
 The steady state of the middle branch, C_A = 2.353 kmol/m³, T = 362.4 K and Tj = 345.69 K, and its open-loop eigenvalues, +0.060, −0.1349 and −0.7989 1/min, which the case reproduces within the tolerances of `tests/units/test_reactor.py`. No trajectory is kept as a reference result.

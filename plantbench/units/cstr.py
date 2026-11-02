@@ -166,6 +166,43 @@ def steady_state_branches(p: ReactorParameters, T_range=(290.0, 420.0), n=20_000
     return np.array(roots)
 
 
+def branch_start(T: float, p: ReactorParameters) -> np.ndarray:
+    """A start for `steady_state` on the branch at temperature T: C_A from the component
+    balance and T_j from the jacket's at that temperature."""
+    CA = p.CA0 / (1.0 + rate_constant(T, p) * p.V / p.F0)
+    c = p.U * p.A_ht / (p.Fj * p.rhoj * p.cpj)
+    Tj = (p.Tj0 + c * T) / (1.0 + c)
+    return np.array([CA, T, Tj])
+
+
+def steady_states(p: ReactorParameters) -> list[np.ndarray]:
+    """Every steady state of `rhs_constant_volume`, [C_A, T, T_j], low branch first: each
+    temperature of `steady_state_branches` refined on the full model."""
+    return [steady_state(p, guess=branch_start(T, p)) for T in steady_state_branches(p)]
+
+
+# --------------------------------------------------------------------------------
+# Measurement spans and operating limits
+# --------------------------------------------------------------------------------
+#
+# Shared by the cases that hold this reactor, `jacketed_cstr` and the reactor of
+# `reactor_separator_recycle`, so that the two cannot drift apart.  The reference gives
+# no transmitter ranges and no limits, so each number is a choice, as plain data that the
+# cases turn into `core.limits.Limits` (`casekit.limits_from`): a span is (lo, hi, why), a
+# limit (value, why), by the measurement names of `jacketed_cstr`.
+LIMITS = {
+    "T": {
+        "span": (340.0, 385.0, "the range the composition primary moves the temperature "
+                               "set-point in"),
+        "trip_hi": (372.0, "10 K above the design point (362.40 K), 5 K below the "
+                           "high-temperature steady state (377.08 K)"),
+        "alarm_lo": (350.0, "on the way to the low-temperature steady state (338.22 K), "
+                            "where the reactor loses its production"),
+    },
+    "C_A": {"span": (0.0, 5.0, "up to the feed concentration, C_A0 = 5 kmol/m3")},
+}  # K, kmol/m3
+
+
 # --------------------------------------------------------------------------------
 # Plantwide form: variable volume, three species
 # --------------------------------------------------------------------------------
