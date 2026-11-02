@@ -15,6 +15,7 @@ unless another branch is asked for.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import ClassVar
 
 import numpy as np
 
@@ -42,6 +43,8 @@ class Design:
     x: np.ndarray
     u: Inputs
     branch: str
+    # The right-hand side and the measures take a batch of states (`control.supports_batch`).
+    batched: ClassVar[bool] = True
 
     def rhs(self, t: float, x: np.ndarray, u: Inputs, pp: ReactorParameters) -> np.ndarray:
         return cstr.rhs_constant_volume(t, x, pp, T0=u.T0, CA0=u.CA0, Fj=u.Fj, F0=u.F0)

@@ -125,7 +125,7 @@ From `studies/reactor_separator_recycle/results/`:
 
 ## Verification
 
-`tests/units/test_reactor.py` checks the reactor against its published steady state and eigenvalues, and gates everything else. `tests/cases/reactor_separator_recycle/` asserts conservation (column material balance, mole fractions, whole-plant energy balance at three pressures, inert accumulated against inert fed), analytic limits, the pinch bound on every network, and the design point as a fixed point of every structure. `test_golden.py` reproduces the reference results.
+`tests/units/test_reactor.py` checks the reactor against its published steady state and eigenvalues, and gates everything else. `tests/cases/reactor_separator_recycle/` asserts conservation (column material balance, mole fractions, whole-plant energy balance at three pressures, inert accumulated against inert fed), analytic limits, the pinch bound on every network, and the design point as a fixed point of every structure. `test_golden.py` reproduces the reference results. The base plant's right-hand side and measurements take a batch of states, for the batched Jacobian and ensembles, through batched forms of the reactor and column blocks (`rhs_batch`); the scalar forms, with which the reference results are computed, are unchanged. `tests/cases/test_reactor_batch.py` checks a batch against its rows one at a time, the conservation of volume and species in the batched balances, and an ensemble against `run`.
 
 ## References
 
@@ -140,3 +140,4 @@ From `studies/reactor_separator_recycle/results/`:
 - No safety layer, start-up or shutdown, fouling or capital cost.
 - Measurements and valves are ideal unless instruments or actuators are configured.
 - The design solve fails at about half the design boil-ups tried (see Options).
+- The heat-integrated plants have no batched right-hand side, so they run neither with the batched Jacobian nor as ensembles.

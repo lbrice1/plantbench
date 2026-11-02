@@ -84,3 +84,21 @@ def test_an_ensemble_on_the_device_agrees_with_one_on_the_host(setup, tuning):
     m, k, i = np.unravel_index(np.argmax(err), err.shape)
     assert err[m, k, i] < 0.25, (f"member {m}, t = {host.t[k]}, state {i}: host "
                                 f"{host.Y[m, k, i]!r}, device {dev.Y[m, k, i]!r}")
+
+
+@pytest.mark.parametrize("case_id", ["jacketed_cstr", "reactor_separator_recycle"])
+def test_a_reactor_case_on_the_device_is_the_one_on_the_host(case_id):
+    """The batched right-hand side and measurements of the reactor cases, at 8 states 1 %
+    from the design, on the device and on the host."""
+    case = pb.load_case(case_id)
+    d = pb.build(case, case.config()).design
+    X = d.x * (1.0 + 1e-2 * np.random.default_rng(0).standard_normal((8, len(d.x))))
+    u = ctl.batch_inputs(d.u, len(X))
+    ud = ctl.batch_inputs(d.u, len(X), backend.module("cuda"))
+    Xd = backend.to_device(X, "cuda")
+    F = d.rhs(0.0, X, u, d.pp)
+    np.testing.assert_allclose(backend.to_host(d.rhs(0.0, Xd, ud, d.pp)), F, rtol=1e-12,
+                               atol=1e-12 * np.abs(F).max())
+    for name, f in case.measurements(d).items():
+        np.testing.assert_allclose(backend.to_host(f(Xd, ud, d.pp)), f(X, u, d.pp),
+                                   rtol=1e-12, err_msg=name)
