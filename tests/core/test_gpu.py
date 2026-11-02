@@ -102,3 +102,17 @@ def test_a_reactor_case_on_the_device_is_the_one_on_the_host(case_id):
     for name, f in case.measurements(d).items():
         np.testing.assert_allclose(backend.to_host(f(Xd, ud, d.pp)), f(X, u, d.pp),
                                    rtol=1e-12, err_msg=name)
+
+
+def test_an_ensemble_stepper_on_the_device_steps_as_on_the_host():
+    from plantbench.core.ensemble_stepper import EnsembleStepper
+    case = pb.load_case("jacketed_cstr")
+    configs = [case.config("temperature PI", disturbance={"name": "feed_temperature",
+                                                          "value": v, "t": 1.25})
+               for v in (330.0, 340.0)]
+    host = EnsembleStepper.from_configs(case, configs, 0.5)
+    dev = EnsembleStepper.from_configs(case, configs, 0.5, device="cuda")
+    for _ in range(10):
+        a, b = host.step(), dev.step()
+        for i in range(2):
+            np.testing.assert_allclose(b.steps[i].x, a.steps[i].x, rtol=1e-9)

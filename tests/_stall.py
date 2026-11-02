@@ -2,7 +2,8 @@
 time limits of the stepper.
 
 The input `stall` is seconds of `usleep` in libc per evaluation, a call no Python signal
-interrupts; zero, the design value, costs nothing.  The design solve sleeps or fails when
+interrupts; zero, the design value, costs nothing.  The right-hand side takes a batch, for
+the ensemble stepper, and sleeps for the longest stall in it.  The design solve sleeps or fails when
 the environment says so, which reaches a spawned worker as well, so that a worker's start
 can be made to stall or fail after the parent has built the same plant.
 """
@@ -14,11 +15,13 @@ import ctypes.util
 import os
 import time
 from dataclasses import dataclass
+from typing import ClassVar
 
 import numpy as np
 
 from plantbench.core import control as ctl
 from plantbench.core.case import Case, Config
+from plantbench.core.casekit import measured
 from plantbench.core.control import Loop
 
 LIBC = ctypes.CDLL(ctypes.util.find_library("c"))
@@ -41,11 +44,13 @@ class Design:
     x: np.ndarray
     u: Inputs
     pp: Params
+    batched: ClassVar[bool] = True
 
     def rhs(self, t, x, u, pp):
-        if u.stall > 0.0:
-            LIBC.usleep(int(u.stall * 1e6))
-        return np.array([(u.q - x[0]) / pp.tau])
+        stall = float(np.max(u.stall))
+        if stall > 0.0:
+            LIBC.usleep(int(stall * 1e6))
+        return ((u.q - x[..., 0]) / pp.tau)[..., None]
 
 
 def make_design(config: Config) -> Design:
@@ -57,7 +62,7 @@ def make_design(config: Config) -> Design:
 
 
 def make_structure(design, config: Config):
-    level = lambda x, u, pp: float(x[0])  # noqa: E731
+    level = lambda x, u, pp: measured(x[..., 0])  # noqa: E731
     return ctl.bias_from_design([Loop("level", level, "q", Kc=0.5, tau_I=4.0)], design)
 
 
@@ -71,6 +76,6 @@ CASE = Case(
     make_design=make_design,
     make_structure=make_structure,
     disturbances={},
-    measurements=lambda design: {"x": lambda x, u, pp: float(x[0])},
+    measurements=lambda design: {"x": lambda x, u, pp: measured(x[..., 0])},
     state_names=lambda design: ["x"],
 )

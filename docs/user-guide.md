@@ -192,6 +192,22 @@ with pb.Stepper(setup, dt=0.5, inputs=["Fj"], step_budget=10.0, episode_budget=6
 
 The worker builds the plant again from the case's module and the configuration, which takes as long as `pb.build` does, within `startup_budget` seconds if one is given. A case must therefore be importable in a fresh process: a built-in case, an installed one or one defined in an importable module. A case defined in a script, or changed after import, is refused a budget and steps without one. A setup changed after `build` is refused as well, since the worker would step another plant.
 
+A policy that acts on many closed loops at once, the starts of a map, the scenarios of a stress set or the environments of a training run, evaluates its action once on the batch of their observations. `pb.EnsembleStepper` advances the members together, by the lockstep Rodas5P integrator of the ensembles (Ensembles in lockstep), each from the state it reached:
+
+```python
+case = pb.load_case("jacketed_cstr")
+configs = [case.config("temperature PI", disturbance={"name": "feed_temperature", "value": v})
+           for v in (330.0, 340.0, 345.0)]
+ens = pb.EnsembleStepper.from_configs(case, configs, dt=0.5, inputs=["Fj"])
+obs = ens.observe()
+for k in range(400):
+    obs = ens.step({"Fj": policy(obs.y)})    # obs.y["T"] is one value per member
+```
+
+Each member is a `Stepper` of its own (`ens.members`), which decides what ownership, the nominal action, noise and observations mean, as for one plant. An action gives one value per member, or one for all. `EnsembleStep.steps[i]` is member i's `Step`, which a `Monitor` reads as it reads a scalar stepper's, and `y`, `y_true`, `u`, `y_min` and `y_max` hold the same values as arrays over the members. The members must share one design and the layout of their structures, as the members of an ensemble run do; `from_configs` builds them on one design and refuses configurations that need different ones. The design must declare a batched right-hand side.
+
+A member agrees with a scalar stepper of its configuration to the solver's tolerance, not to the last bit, since the integration is Rodas5P rather than LSODA. It does not depend on the other members: alone, or in another order, it steps bit for bit as it does in the ensemble. `extrema` are taken at `refine` equal parts of the whole interval, the same for every member, and on both sides of each of the member's own breakpoints. A member whose integration fails has its `StepFailed` in `errors`, NaN in the arrays and no `Step`; it stays where its interval began, and the others go on until `reset()`. With `step_budget` or `episode_budget`, one worker process integrates every member, and a step that runs over terminates it: all the members are lost, and the ensemble stepper cannot be used again.
+
 ## Limits and outcomes
 
 A case declares the span, the alarm and trip limits, and the open-loop steady states of the measurements it bounds, `case.limits(design)`, a `core.limits.Limits` per measurement name. Each number is tagged as the case cards tag theirs: `"source"` when the case's reference gives it, `"choice"` when the case decides it, with the reason in `why`:
