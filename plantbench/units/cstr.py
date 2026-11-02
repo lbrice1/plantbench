@@ -18,6 +18,8 @@ from __future__ import annotations
 import numpy as np
 from scipy.optimize import fsolve
 
+from plantbench.backend import namespace
+
 from .parameters import R_GAS, ReactorParameters
 
 # Species order used throughout the package: inert, reactant, product.
@@ -27,7 +29,7 @@ N_SPECIES = 3
 
 def rate_constant(T: float | np.ndarray, p: ReactorParameters) -> float | np.ndarray:
     """Arrhenius rate constant, in 1/min."""
-    return p.k0 * np.exp(-p.E / (R_GAS * T))
+    return p.k0 * namespace(T).exp(-p.E / (R_GAS * T))
 
 
 # --------------------------------------------------------------------------------
@@ -47,9 +49,11 @@ def rhs_constant_volume(
     """Right-hand side of Equation 17.10.  State is [C_A, T, T_j].
 
     `T0`, `CA0`, `Fj` and `F0` override the nominal values so that disturbances and the
-    manipulated variable can be driven from outside.
+    manipulated variable can be driven from outside.  A batch of states, x (m, 3) with
+    each override (m,), gives the derivatives (m, 3), on NumPy or CuPy.
     """
-    CA, T, Tj = x
+    xp = namespace(x)
+    CA, T, Tj = x[..., 0], x[..., 1], x[..., 2]
     T0 = p.T0 if T0 is None else T0
     CA0 = p.CA0 if CA0 is None else CA0
     Fj = p.Fj if Fj is None else Fj
@@ -65,7 +69,7 @@ def rhs_constant_volume(
         - q_ht / (p.V * p.rho * p.cp)
     )
     dTj = Fj * (p.Tj0 - Tj) / p.Vj + q_ht / (p.Vj * p.rhoj * p.cpj)
-    return np.array([dCA, dT, dTj])
+    return xp.stack([dCA, dT, dTj], axis=-1)
 
 
 def steady_state(
@@ -247,3 +251,25 @@ def rhs_multicomponent(
     dTj = Fj * (p.Tj0 - Tj) / p.Vj + q_ht / (p.Vj * p.rhoj * p.cpj)
 
     return np.concatenate([[dV], dC, [dT, dTj]])
+
+
+def rhs_multicomponent_batch(X, p: ReactorParameters, F_in, C_in, T_in, F_out, Fj):
+    """`rhs_multicomponent` at a batch of m states, X (m, 6), with each flow and
+    temperature (m,) and C_in (m, 3), on NumPy or CuPy.  `rhs_multicomponent` itself is
+    kept as it is, since the frozen results of `reactor_separator_recycle` are computed
+    with it."""
+    xp = namespace(X)
+    V, C = X[:, 0], X[:, 1:1 + N_SPECIES]
+    T, Tj = X[:, 1 + N_SPECIES], X[:, 2 + N_SPECIES]
+
+    k = rate_constant(T, p)
+    r = xp.stack([xp.zeros_like(k), -k * C[:, A], k * C[:, A]], axis=1)
+    q_ht = p.U * p.A_ht * (T - Tj)
+
+    dV = F_in - F_out
+    dC = (F_in[:, None] * (C_in - C) + V[:, None] * r) / V[:, None]
+    dT = (
+        F_in * (T_in - T) + p.dH * k * C[:, A] * V / (p.rho * p.cp) - q_ht / (p.rho * p.cp)
+    ) / V
+    dTj = Fj * (p.Tj0 - Tj) / p.Vj + q_ht / (p.Vj * p.rhoj * p.cpj)
+    return xp.concatenate([dV[:, None], dC, dT[:, None], dTj[:, None]], axis=1)

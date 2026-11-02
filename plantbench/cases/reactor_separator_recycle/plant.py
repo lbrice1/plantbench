@@ -36,6 +36,7 @@ from typing import Callable, ClassVar
 import numpy as np
 from scipy.optimize import fsolve
 
+from plantbench.backend import namespace
 from plantbench.units import column as col
 from plantbench.units import cstr
 
@@ -88,9 +89,14 @@ class Design:
     def recycle(self) -> float:
         return self.u.D - self.u.P
 
+    # The right-hand side and the measures take a batch of states (`control.supports_batch`);
+    # the heat-integrated plants (`integrated.IntegratedDesign`) do not.
+    batched: ClassVar[bool] = True
+
     def rhs(self, t: float, x: np.ndarray, u: Inputs, pp: PlantParameters) -> np.ndarray:
-        """The plant's right-hand side, which the closed-loop simulator integrates."""
-        return rhs(t, x, u, pp)
+        """The plant's right-hand side, which the closed-loop simulator integrates: `rhs`
+        for one state, `rhs_batch` for a batch."""
+        return rhs(t, x, u, pp) if x.ndim == 1 else rhs_batch(t, x, u, pp)
 
     def summary(self) -> str:
         u = self.u
@@ -305,3 +311,28 @@ def rhs(t: float, x: np.ndarray, u: Inputs, pp: PlantParameters) -> np.ndarray:
         x[N_REACTOR_STATES:], cp, F_col, zF, 1.0, u.V_boil, u.L_reflux, u.D, u.Bm
     )
     return np.concatenate([reactor, column])
+
+
+def rhs_batch(t: float, X, u: Inputs, pp: PlantParameters):
+    """`rhs` at a batch of m states, X (m, n), with every field of `u` carrying the leading
+    axis (`control.batch_inputs`): the same flowsheet from the batched reactor and column
+    blocks, on NumPy or CuPy.  `rhs` itself is kept as it is, since the frozen results are
+    computed with it."""
+    xp = namespace(X)
+    rp, cp, rho_m = pp.reactor, pp.column, pp.rho_molar
+    N = N_REACTOR_STATES
+
+    # The mixer, row by row: fresh feed and recycle, nothing when both are shut.
+    R = u.D - u.P
+    xD = X[:, N + 1:N + 4]
+    n = u.F_fresh + R
+    flowing = n > 0
+    z = (u.F_fresh[:, None] * u.z_fresh + R[:, None] * xD) / xp.where(flowing, n, 1.0)[:, None]
+    F_in = xp.where(flowing, n / rho_m, 0.0)
+    C_in = xp.where(flowing[:, None], z * rho_m, 0.0)
+
+    reactor = cstr.rhs_multicomponent_batch(X[:, :N], rp, F_in, C_in, u.T_fresh, u.F_out, u.Fj)
+    zF = X[:, 1:1 + 3] / rho_m
+    column = col.rhs_batch(X[:, N:], cp, u.F_out * rho_m, zF, 1.0, u.V_boil, u.L_reflux, u.D,
+                           u.Bm)
+    return xp.concatenate([reactor, column], axis=1)

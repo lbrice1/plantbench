@@ -66,7 +66,7 @@ The steady state of the middle branch, C_A = 2.353 kmol/m³, T = 362.4 K and Tj 
 
 ## Verification
 
-`tests/units/test_reactor.py` checks the steady state against the published 2.353 kmol/m³, 362.4 K and 345.69 K, and the eigenvalues against the published +0.060, −0.1349 and −0.7989. `tests/cases/jacketed_cstr/` checks that the case's right-hand side is the reference constant-volume model exactly, that only the middle branch is open-loop unstable, that both structures stabilize it, and the open-loop departures to the other branches.
+`tests/units/test_reactor.py` checks the steady state against the published 2.353 kmol/m³, 362.4 K and 345.69 K, and the eigenvalues against the published +0.060, −0.1349 and −0.7989. `tests/cases/jacketed_cstr/` checks that the case's right-hand side is the reference constant-volume model exactly, that only the middle branch is open-loop unstable, that both structures stabilize it, and the open-loop departures to the other branches. The right-hand side and the measurements take a batch of states, for the batched Jacobian and ensembles; `tests/cases/test_reactor_batch.py` checks a batch against its rows one at a time and an ensemble against `run`.
 
 ## Limitations
 
