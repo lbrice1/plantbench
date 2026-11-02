@@ -131,9 +131,26 @@ A disturbance is a function `d(t, u0) -> u` returning the inputs in force at tim
 {"name": "ramp", "field": "F0", "value": 3.5, "t": 10.0, "duration": 60.0}
 ```
 
-Cases add named disturbances where the change is not a change of one input, such as `reactor_separator_recycle`'s `throughput`, which acts through whichever input sets production in the chosen structure. A list of disturbances is applied in order.
+Cases add named disturbances where the change is not a change of one input, such as `reactor_separator_recycle`'s `throughput`, which acts through whichever input sets production in the chosen structure. A list of disturbances is applied in order, each to the inputs the previous ones produced, so two fractional steps of one input compound: +5% and then +10% of `CA0` give +15.5%.
 
-A disturbance that changes the inputs discontinuously declares the times it does so as an attribute `times`; `step`, `ramp` and `combine` set it. `plantbench.run` restarts the integration at those times and at every scheduled set-point change, so the solver never steps across one. A disturbance written by hand should set `times` as well. `control.simulate`, which the `reactor_separator_recycle` study scripts use, integrates in one call, as the reference results were produced.
+A `sequence` moves an input through levels that do not compound, each relative to the nominal inputs. `of` names the disturbance the sequence is made of, `step` by default or any the case provides; `level` names the argument that takes each level, `fraction` by default; the other arguments are passed to every part, with its time:
+
+```python
+{"name": "sequence", "field": "CA0", "times": [10.0, 40.0], "levels": [0.05, 0.10]}
+{"name": "sequence", "of": "feed_temperature", "level": "change",
+ "times": [50.0, 150.0, 300.0], "levels": [-4.0, 6.0, 0.0]}
+```
+
+A `random_sequence` draws the times and the levels from a seed, as identification data are excited: the first switch at `start`, each next one after a dwell drawn uniformly in `dwell`, the last before `end`, and each level uniform in [`low`, `high`] (`kind = "uniform"`, an amplitude-modulated pseudo-random binary signal) or one of the two bounds (`kind = "binary"`):
+
+```python
+{"name": "random_sequence", "of": "throughput", "seed": 3, "low": -0.12, "high": 0.15,
+ "dwell": [100.0, 400.0], "start": 30.0, "end": 1500.0}
+```
+
+The seed is part of the configuration, so a sweep over `"disturbance.seed"` gives a reproducible set of excitations, each run identified by its seed. Every switching time is declared, and the integration restarts there. `core.disturbances.sequence`, `step_sequence` and `random_levels` build the same disturbances in code. The setup's disturbance carries the levels it was built with as `levels`.
+
+A disturbance that changes the inputs discontinuously declares the times it does so as an attribute `times`; `step`, `ramp`, `combine` and the sequences set it. `plantbench.run` restarts the integration at those times and at every scheduled set-point change, so the solver never steps across one. A disturbance written by hand should set `times` as well. `control.simulate`, which the `reactor_separator_recycle` study scripts use, integrates in one call, as the reference results were produced.
 
 ## Linear analysis
 

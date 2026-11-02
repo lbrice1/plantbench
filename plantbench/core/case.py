@@ -396,11 +396,48 @@ def _disturbance(case: Case, design, config: Config) -> dist.Disturbance | None:
     for spec in specs:
         spec = dict(spec)
         name = spec.pop("name", None)
+        if name in SEQUENCES and name not in case.disturbances:
+            parts.append(_sequence(case, available, design, config, name, spec))
+            continue
         if name not in available:
             raise KeyError(f"case {case.id} has no disturbance {name!r}; "
-                           f"available: {sorted(available)}")
+                           f"available: {sorted([*available, *SEQUENCES])}")
         parts.append(available[name](design, config, **spec))
     return parts[0] if len(parts) == 1 else dist.combine(*parts)
+
+
+# A sequence of any other disturbance: `of` names it, `level` the argument that takes each
+# level, and the remaining arguments are passed to every part with its own time `t`.
+SEQUENCES = {"sequence": ("times", "levels"),
+             "random_sequence": ("seed", "low", "high", "dwell", "start", "end", "kind")}
+
+
+def _sequence(case: Case, available, design, config: Config, name: str,
+              spec: dict) -> dist.Disturbance:
+    """`{"name": "sequence", "of": ..., "level": ..., "times": [...], "levels": [...]}`, or
+    `"random_sequence"` with the arguments of `disturbances.random_levels` in place of
+    the times and the levels: the disturbance `of` at each level from its time on, each
+    level relative to the nominal inputs (`disturbances.sequence`)."""
+    of, level = spec.pop("of", "step"), spec.pop("level", "fraction")
+    if of not in available:
+        raise KeyError(f"case {case.id} has no disturbance {of!r} to make a sequence of; "
+                       f"available: {sorted(available)}")
+    own = {k: spec.pop(k) for k in SEQUENCES[name] if k in spec}
+    if "t" in spec or level in spec:
+        raise ValueError(f"a {name} gives each part its time and its {level!r}")
+    if name == "sequence":
+        missing = {"times", "levels"} - set(own)
+        if missing:
+            raise KeyError(f"a sequence needs {sorted(missing)}")
+        times, levels = own["times"], own["levels"]
+        if len(levels) != len(times):
+            raise ValueError("a sequence needs one level per time")
+    else:
+        times, levels = dist.random_levels(**own)
+    d = dist.sequence([available[of](design, config, **spec, t=float(t), **{level: float(v)})
+                       for t, v in zip(times, levels)], times)
+    d.levels = tuple(float(v) for v in levels)
+    return d
 
 
 # ------------------------------------------------------------------------------------
