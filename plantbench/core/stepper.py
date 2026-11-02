@@ -144,7 +144,16 @@ class Stepper:
         self._worker: _Worker | None = None
         self.reset()
         if step_budget is not None or episode_budget is not None:
-            self._worker = _Worker(self, startup_budget)
+            module, attr = _importable(setup.case)
+            self._worker = _Worker(self, _serve, (
+                module, attr, setup.config.to_dict(), self.dt, self.inputs, self.setpoints,
+                rtol, atol, self.extrema, self.refine), startup_budget)
+            x, x0 = self._worker.ready
+            if not (np.array_equal(x, self.design.x) and np.array_equal(x0, setup.x0)):
+                self.close()
+                raise ValueError("the worker's plant differs from the setup's: a stepper "
+                                 "with a time limit needs a setup that `build` makes from "
+                                 "its configuration")
 
     def _check_setpoints(self) -> dict[str, int]:
         """The position in the structure of each loop whose set-point is owned."""
@@ -420,31 +429,22 @@ def _serve(conn, module: str, attr: str, config: dict, dt: float, inputs, setpoi
 
 
 class _Worker:
-    """A spawned process that advances the stepper's intervals, terminated on a timeout."""
+    """A spawned process running `target(conn, *args)`, which builds its plant, sends what
+    it built as `ready` and then advances intervals on request; terminated on a timeout,
+    and when `owner` is collected."""
 
-    def __init__(self, stepper: Stepper, startup_budget: float | None):
-        setup = stepper.setup
-        module, attr = _importable(setup.case)
+    def __init__(self, owner, target, args: tuple, startup_budget: float | None):
         ctx = multiprocessing.get_context("spawn")
         self.conn, child = ctx.Pipe()
-        self.process = ctx.Process(
-            target=_serve, daemon=True,
-            args=(child, module, attr, setup.config.to_dict(), stepper.dt, stepper.inputs,
-                  stepper.setpoints, stepper.rtol, stepper.atol, stepper.extrema,
-                  stepper.refine))
+        self.process = ctx.Process(target=target, daemon=True, args=(child, *args))
         self.process.start()
         child.close()
-        self._finalizer = weakref.finalize(stepper, _stop, self.process, self.conn)
+        self._finalizer = weakref.finalize(owner, _stop, self.process, self.conn)
         try:
-            x, x0 = self.call(None, startup_budget, "the worker's start")
+            self.ready = self.call(None, startup_budget, "the worker's start")
         except BaseException:
             self.close()
             raise
-        if not (np.array_equal(x, setup.design.x) and np.array_equal(x0, setup.x0)):
-            self.close()
-            raise ValueError("the worker's plant differs from the setup's: a stepper with a "
-                             "time limit needs a setup that `build` makes from its "
-                             "configuration")
 
     def call(self, message, limit: float | None, what: str) -> Any:
         """Send `message` (None to wait for the start) and return the reply's value, or
