@@ -176,6 +176,18 @@ def state_layout(structure: Structure) -> tuple[list[tuple[slice, slice, slice]]
     return slots, off
 
 
+def augmented_names(structure: Structure) -> list[str]:
+    """One name per augmented state, in the order of `state_layout`: "<element>.integral"
+    for the integrals, then each element's "<element>.instrument[i]",
+    "<element>.actuator[i]" and "<element>.filter[i]"."""
+    slots, _ = state_layout(structure)
+    names = [f"{e.name}.integral" for e in structure]
+    for e, block in zip(structure, slots):
+        for kind, s in zip(("instrument", "actuator", "filter"), block):
+            names += [f"{e.name}.{kind}[{i}]" for i in range(s.stop - s.start)]
+    return names
+
+
 def n_augmented(structure: Structure) -> int:
     """Length of the augmented state vector this structure adds to the plant."""
     return state_layout(structure)[1]

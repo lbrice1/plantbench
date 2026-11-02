@@ -237,6 +237,24 @@ ctl.damping_ratio(ev)                  # 0.013 for D4
 
 The Jacobian is taken by central differences on the closed-loop right-hand side, including the integral, instrument and actuator states. One structural zero per ratio station is removed.
 
+A stepper holding one action defines a map over one interval, y_{k+1} = F(y_k), on the plant state and the states of the loops that remain. `plantbench.core.stepmap` finds its fixed point, by `scipy.optimize.fsolve`, which finds unstable fixed points as well as stable ones, and linearizes it there by central differences:
+
+```python
+from plantbench.core import stepmap
+
+setup = pb.build("jacketed_cstr")
+lin = stepmap.linearize(pb.Stepper(setup, dt=0.5, inputs=["Fj"]))   # Fj held at its design value
+lin.eigenvalues            # 1.03048, 0.93475, 0.67067: exp(lambda dt) of the open-loop reactor
+lin.stable, lin.decay_time # False, and 7.41 min for the slowest stable mode
+lin.shares(scale={"T": 45.0})   # each state's share in the dominant mode
+```
+
+`lin.y` is the fixed point, in the coordinates `lin.names`, and `lin.residual` how far it is from one. The map is the stepper's own integration of an interval at tolerances of 1e-11 and 1e-12, tighter than a step's, so that the differences resolve its derivative. Noise enters the samples only and has no part in the map, and the stepper is left at its time, its state and its noise generator. A map depends on time under a disturbance or a set-point schedule, so such a stepper is refused. The integrals of ratio stations never change and are not coordinates.
+
+With nothing owned, or with owned inputs and set-points held, the loops that remain act continuously within the interval, and the eigenvalues of the map are exp(lambda dt) of the continuous closed loop's: of `setup.spectrum()` when nothing is owned, 0.97452 for the slowest mode of `temperature PI` at dt = 0.5 min. A controller sampled at dt with a memory of its own, a sampled PI loop say, makes the map's state larger than this, and the equality does not hold for it. At a fixed point where a valve sits at a limit the closed loop is not differentiable; the differences then average its two sides, and the eigenvalues describe neither.
+
+The shares of a mode depend on how the coordinates are scaled. By default each is scaled by max(|y_i|, 1), the scale of the differences; `scale` gives others by name, a measurement's span for instance.
+
 ## The batched Jacobian and GPUs
 
 LSODA forms the Jacobian of the closed loop by forward differences, one evaluation of the right-hand side per state. On a plant with several hundred states and an equation of state inside its right-hand side, these evaluations are almost the whole cost of a run: on `ngl_deethanizer`, 97 % of them. A case whose right-hand side and measures accept a batch of states can instead have the whole Jacobian evaluated as one batch and handed to LSODA:

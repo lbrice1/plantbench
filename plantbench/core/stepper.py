@@ -260,10 +260,16 @@ class Stepper:
         self._noise = self._draw()
         return self._observe(nfev)
 
-    def _advance(self, y: np.ndarray, t: float, action: dict
+    def _advance(self, y: np.ndarray, t: float, action: dict, rtol: float | None = None,
+                 atol: float | None = None, extrema: tuple | None = None
                  ) -> tuple[np.ndarray, int, tuple[dict, dict]]:
         """The closed-loop state after one interval from (t, y) under `action`, the
-        evaluations it took, and the extremes of the `extrema` measurements over it."""
+        evaluations it took, and the extremes of the `extrema` measurements over it; the
+        tolerances and the measurements are the stepper's unless given
+        (`core.stepmap`)."""
+        rtol = self.rtol if rtol is None else rtol
+        atol = self.atol if atol is None else atol
+        extrema = self.extrema if extrema is None else tuple(extrema)
         S = self._structure_with(action)
         owned = {f: action[f] for f in self.inputs}
         a, b = t, t + self.dt
@@ -272,13 +278,13 @@ class Stepper:
         lo_values: dict[str, float] = {}
         hi_values: dict[str, float] = {}
         for lo, hi in zip(edges[:-1], edges[1:]):
-            grid = np.linspace(lo, hi, self.refine + 1) if self.extrema else [hi]
+            grid = np.linspace(lo, hi, self.refine + 1) if extrema else [hi]
             sol = solve_ivp(self._rhs, (lo, hi), y, args=(S, owned), method="LSODA",
-                            t_eval=grid, rtol=self.rtol, atol=self.atol)
+                            t_eval=grid, rtol=rtol, atol=atol)
             if not sol.success:
                 raise StepFailed(f"integration failed on [{lo:g}, {hi:g}]: {sol.message}")
             nfev += int(sol.nfev)
-            if self.extrema:
+            if extrema:
                 if not np.isfinite(sol.y).all():
                     raise StepFailed(f"non-finite state on [{lo:g}, {hi:g}]")
                 # The segment's end is evaluated with the inputs in force just before it,
@@ -286,7 +292,7 @@ class Stepper:
                 times = [*sol.t[:-1], np.nextafter(hi, lo)]
                 for tk, yk in zip(times, sol.y.T):
                     u, _ = self._evaluate(tk, yk, S, owned)
-                    for name in self.extrema:
+                    for name in extrema:
                         v = float(self.measurements[name](yk[:len(self.design.x)], u,
                                                           self.design.pp))
                         lo_values[name] = min(lo_values.get(name, v), v)
@@ -294,10 +300,10 @@ class Stepper:
             y = sol.y[:, -1]
             if not np.isfinite(y).all():
                 raise StepFailed(f"non-finite state at t = {hi:g}")
-        if self.extrema:
+        if extrema:
             # The interval's end as the next interval sees it, with the inputs at b.
             u, _ = self._evaluate(b, y, S, owned)
-            for name in self.extrema:
+            for name in extrema:
                 v = float(self.measurements[name](y[:len(self.design.x)], u, self.design.pp))
                 lo_values[name] = min(lo_values[name], v)
                 hi_values[name] = max(hi_values[name], v)
