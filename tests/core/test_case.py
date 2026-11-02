@@ -163,3 +163,70 @@ def test_a_mismatch_has_no_spectrum(mismatch_case):
     s = cs.build(mismatch_case, mismatch_case.config(mismatch={"K": 3.0}))
     with pytest.raises(ValueError, match="not a steady state"):
         s.spectrum()
+
+
+# -- starts and held inputs -------------------------------------------------------
+
+
+def test_starts_and_holds_enter_the_key_only_when_used():
+    assert Config("PI", x0={"x": 3.0}).key() != Config("PI").key()
+    assert Config("PI", hold={"m": 1.5}).key() != Config("PI").key()
+    d = Config("PI", x0={"x": 3.0}, hold={"m": 1.5}).to_dict()
+    assert Config.from_dict(d).to_dict() == d and "x0" not in Config("PI").to_dict()
+
+
+def test_a_run_starts_where_x0_says_and_returns_to_the_set_point(case):
+    tr = cs.run(case, case.config(x0={"x": 3.0}, instruments={"level": {"tau": 1.0}}),
+                t_end=200.0, dt=1.0)
+    assert tr.x[0, 0] == pytest.approx(3.0, rel=1e-12) and tr.x[0, -1] == pytest.approx(2.0, abs=1e-6)
+    # The instrument starts at rest at the start, reporting the true value.
+    assert tr.c["level.PV"][0] == pytest.approx(3.0, rel=1e-12)
+
+
+def test_a_start_leaves_the_design_and_its_spectrum(case):
+    s = cs.build(case, case.config(x0={"x": 3.0}))
+    assert s.x0[0] == 3.0 and s.design.x[0] == 2.0 and s.nominal is None
+    assert np.array_equal(s.spectrum(), cs.build(case, case.config()).spectrum())
+
+
+def test_a_start_names_states_that_exist(case):
+    with pytest.raises(KeyError, match="no states"):
+        cs.build(case, case.config(x0={"y": 1.0}))
+
+
+def test_a_held_input_removes_its_loop_and_is_constant(case):
+    s = cs.build(case, case.config(hold={"m": 1.5}))
+    assert s.structure == [] and [e.name for e in s.held] == ["level"]
+    assert s.design.u.m == 1.5 and s.nominal.u.m == 1.0
+    tr = cs.run(case, case.config(hold={"m": 1.5}), t_end=100.0, dt=1.0)
+    assert np.all(tr.u["m"] == 1.5) and tr.x[0, -1] == pytest.approx(3.0, rel=1e-5)
+    with pytest.raises(ValueError, match="not a steady state"):
+        s.spectrum()
+
+
+def test_an_input_held_at_its_design_value_keeps_the_design(case):
+    s = cs.build(case, case.config(hold={"m": 1.0}))
+    assert s.nominal is None and s.structure == []
+    assert s.spectrum() == pytest.approx([-1.0 / 5.0])
+
+
+@pytest.mark.parametrize("sections, error, match", [
+    ({"hold": {"nope": 1.0}}, KeyError, "cannot hold"),
+    ({"hold": {"z": 1.0}}, TypeError, "scalar"),
+    ({"hold": {"m": 1.5}, "tuning": {"level": {"Kc": 1.0}}}, ValueError, "removes"),
+    ({"hold": {"m": 1.5}, "setpoints": {"level": 3.0}}, ValueError, "removes"),
+    ({"hold": {"d": 0.5}, "disturbance": {"name": "step", "field": "d", "value": 1.0}},
+     ValueError, "changes the held"),
+])
+def test_conflicting_or_unknown_holds_are_refused(case, sections, error, match):
+    with pytest.raises(error, match=match):
+        cs.build(case, case.config(**sections))
+
+
+def test_each_member_of_an_ensemble_starts_where_it_says():
+    configs = [TANKS_CASE.config(x0={"h1": h1}) for h1 in (1.0, 2.5)]
+    ensemble = cs.run_ensemble(TANKS_CASE, configs, 100.0, dt=1.0)
+    for config, res in zip(configs, ensemble):
+        alone = cs.run(TANKS_CASE, config, t_end=100.0, dt=1.0)
+        assert res.trajectory.x[0, 0] == pytest.approx(config.x0["h1"], rel=1e-12)
+        assert np.allclose(res.trajectory.x, alone.x, rtol=1e-4, atol=1e-6)

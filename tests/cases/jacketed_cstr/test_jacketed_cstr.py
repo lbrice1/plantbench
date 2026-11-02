@@ -100,3 +100,15 @@ def test_a_mismatch_of_a_feed_condition_is_refused(name):
     p = CASE.make_design(CASE.config()).pp
     with pytest.raises(ValueError, match="changes neither"):
         pb.build(CASE, CASE.config(mismatch={name: 1.1 * getattr(p, name)}))
+
+
+def test_holding_the_coolant_under_the_cascade_is_the_open_loop_reactor():
+    """Both loops go, the cascade primary with the loop it writes to, and the run is the
+    open-loop one to the last bit: the 340 K feed carries the reactor to the high branch."""
+    Fj = CASE.make_design(CASE.config()).u.Fj
+    dist = {"name": "feed_temperature", "value": 340.0, "t": 10.0}
+    held = pb.run(CASE, CASE.config("composition cascade", disturbance=dist, hold={"Fj": Fj}),
+                  t_end=200.0, dt=0.5)
+    open_loop = pb.run(CASE, CASE.config("open loop", disturbance=dist), t_end=200.0, dt=0.5)
+    assert np.array_equal(held.x, open_loop.x)
+    assert held.state("T")[-1] > 370.0

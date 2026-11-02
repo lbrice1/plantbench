@@ -55,6 +55,10 @@ class Config:
     mismatch         overrides of the plant's parameters by dotted path, applied after the
                      design is solved and the structure biased from it: the plant departs
                      from the design while the start, the biases and the set-points stay
+    x0               state name -> value at the start of the run, the other states at the
+                     design; instruments and filters start at rest at that state
+    hold             input name -> a constant value for the whole run; the loops that write
+                     the input are removed, and any cascade primary of a removed loop
 
     Every section is empty by default, and a configuration with only a structure named
     is the case's reference plant.  `params` moves the design with the parameters, and
@@ -72,6 +76,8 @@ class Config:
     actuators: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     disturbance: Mapping[str, Any] | list = field(default_factory=dict)
     mismatch: Mapping[str, float] = field(default_factory=dict)
+    x0: Mapping[str, float] = field(default_factory=dict)
+    hold: Mapping[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         d = _plain(dataclasses.asdict(self))
@@ -99,7 +105,7 @@ class Config:
         return hashlib.sha1(text.encode()).hexdigest()[:16]
 
 
-_LATER_SECTIONS = ("mismatch",)
+_LATER_SECTIONS = ("mismatch", "x0", "hold")
 
 
 def _plain(v):
@@ -216,9 +222,11 @@ GENERIC_DISTURBANCES: dict[str, Callable[..., dist.Disturbance]] = {
 class Setup:
     """A configured plant at its design point, ready to simulate.
 
-    Under a `mismatch` section, `design` is the plant, with the changed parameters, at the
-    state and inputs of `nominal`, the design the structure was biased from; otherwise
-    `nominal` is None."""
+    When a `mismatch` changes the plant's parameters or a `hold` moves an input from its
+    design value, `design` is the plant so changed, at the state of `nominal`, the design
+    the structure was biased from; otherwise `nominal` is None.  `x0` is the plant state
+    the run starts from, the design's unless the configuration has an `x0` section, and
+    `held` the elements a `hold` removed from the structure."""
 
     case: Case
     config: Config
@@ -226,14 +234,22 @@ class Setup:
     structure: ctl.Structure
     disturbance: dist.Disturbance | None
     nominal: Any = None
+    x0: np.ndarray | None = None
+    held: ctl.Structure = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.x0 is None:
+            self.x0 = self.design.x
 
     def spectrum(self) -> np.ndarray:
         """Closed-loop eigenvalues at the design point, structural zeros removed.
 
-        Raises under a `mismatch` section, whose start is not a steady state of the plant."""
+        Raises when a `mismatch` or a `hold` has moved the plant from its design, whose
+        state is then not a steady state of the plant.  An `x0` changes only the start."""
         if self.nominal is not None:
-            raise ValueError("under a mismatch section the design point is not a steady "
-                             "state of the plant, so it has no closed-loop spectrum")
+            raise ValueError("under a mismatch, or an input held away from its design "
+                             "value, the design point is not a steady state of the plant, "
+                             "so it has no closed-loop spectrum")
         return ctl.closed_loop_spectrum(self.design, self.structure)
 
 
@@ -262,8 +278,8 @@ def build(case: Case, config: Config | Mapping) -> Setup:
 
 def build_on(case: Case, design, config: Config) -> Setup:
     """`build` on a design already made, for a validated configuration: the structure, the
-    disturbance and any mismatch, which are all that the members of an ensemble do not
-    share."""
+    disturbance, any mismatch, held inputs and start, which are all that the members of an
+    ensemble do not share."""
     structure = case.make_structure(design, config)
     structure = ctl.with_tuning(structure, config.tuning)
     structure = ctl.with_setpoints(structure, config.setpoints)
@@ -273,12 +289,70 @@ def build_on(case: Case, design, config: Config) -> Setup:
         instruments={k: Instrument(**v) for k, v in config.instruments.items()},
         actuators={k: Actuator(**v) for k, v in config.actuators.items()},
     )
+    structure, held = _hold(design, structure, config)
     disturbance = _disturbance(case, design, config)
-    if not config.mismatch:
-        return Setup(case, config, design, structure, disturbance)
-    plant = case.apply_mismatch(design, config.mismatch)
-    _check_mismatch_acts(case, design, plant, structure, config.mismatch)
-    return Setup(case, config, plant, structure, disturbance, nominal=design)
+    plant = design
+    if config.mismatch:
+        plant = case.apply_mismatch(design, config.mismatch)
+        _check_mismatch_acts(case, design, plant, structure, config.mismatch)
+    moved = {k: float(v) for k, v in config.hold.items() if float(v) != getattr(design.u, k)}
+    if moved:
+        if not dataclasses.is_dataclass(plant):
+            raise TypeError(f"{type(plant).__name__} is not a dataclass, so its inputs "
+                            "cannot be held at other values")
+        plant = replace(plant, u=replace(plant.u, **moved))
+    _check_hold_undisturbed(disturbance, plant.u, config.hold)
+    return Setup(case, config, plant, structure, disturbance,
+                 nominal=None if plant is design else design,
+                 x0=_start(case, design, config.x0), held=held)
+
+
+def _hold(design, structure: ctl.Structure, config: Config):
+    """The structure without the elements that write a held input, and those elements.
+    Raises on an input the design does not have or that is not a scalar, and on another
+    section of the configuration that names a removed loop."""
+    for name in config.hold:
+        if not hasattr(design.u, name):
+            raise KeyError(f"cannot hold {name!r}: the inputs are "
+                           f"{[f.name for f in dataclasses.fields(design.u)]}")
+        if np.ndim(getattr(design.u, name)) != 0:
+            raise TypeError(f"cannot hold {name!r}: only a scalar input can be held")
+    structure, held = ctl.without_inputs(structure, config.hold)
+    names = {e.name for e in held}
+    for section in ("setpoints", "setpoint_steps", "tuning", "instruments", "actuators"):
+        clash = sorted(names & set(getattr(config, section)))
+        if clash:
+            raise ValueError(f"{section} names {clash}, which hold "
+                             f"{sorted(config.hold)} removes from the structure")
+    return structure, held
+
+
+def _check_hold_undisturbed(disturbance, u0, hold: Mapping[str, float]) -> None:
+    """Raise if the disturbance changes a held input, at the start or at any of the times
+    it declares (`control.breakpoints_of`): the input would have two owners."""
+    if disturbance is None or not hold:
+        return
+    for t in (0.0, *getattr(disturbance, "times", ())):
+        u = disturbance(t, u0)
+        changed = sorted(k for k in hold if getattr(u, k) != getattr(u0, k))
+        if changed:
+            raise ValueError(f"the disturbance changes the held input(s) {changed} at "
+                             f"t = {t:g}")
+
+
+def _start(case: Case, design, x0: Mapping[str, float]) -> np.ndarray:
+    """The plant state a run starts from: the design's, with the states `x0` names set."""
+    x = np.array(design.x, dtype=float)
+    if not x0:
+        return x
+    names = list(case.state_names(design))
+    unknown = sorted(set(x0) - set(names))
+    if unknown:
+        raise KeyError(f"no states {unknown} in case {case.id}; states are named as "
+                       "`case.state_names(design)` names them")
+    for name, value in x0.items():
+        x[names.index(name)] = float(value)
+    return x
 
 
 def _check_mismatch_acts(case: Case, design, plant, structure: ctl.Structure,
@@ -418,7 +492,7 @@ def run(case: Case, config: Config | Mapping, t_end: float, n_points: int | None
     r = ctl.integrate(setup.design, setup.structure, t_end, setup.disturbance, n_points,
                       rtol, atol, measurements=measurements, wall_budget=wall_budget,
                       breakpoints=ctl.breakpoints_of(setup.disturbance, setup.structure),
-                      jacobian=jacobian, device=device)
+                      jacobian=jacobian, device=device, x0=setup.x0)
     return Trajectory(case=case.id, config=setup.config.to_dict(), t=r.t, x=r.X,
                       state_names=list(case.state_names(setup.design)), u=r.U, y=r.Y,
                       wall_time=time.perf_counter() - start, nfev=r.nfev, c=r.C)
@@ -462,7 +536,8 @@ def run_setups(setups: list[Setup], t_end: float, n_points: int | None = None,
             design = setups[chunk[0]].design
             r = integrate_ensemble(design, [setups[k].structure for k in chunk],
                                    [setups[k].disturbance for k in chunk], t_end, n_points,
-                                   rtol, atol, wall_budget=wall_budget, device=device)
+                                   rtol, atol, wall_budget=wall_budget, device=device,
+                                   starts=[setups[k].x0 for k in chunk])
             n = len(design.x)
             share = r.wall_time / len(chunk)
             for j, k in enumerate(chunk):
