@@ -107,6 +107,7 @@ An id is refused if it breaks the naming convention, names a built-in case, or i
 | `StateLayout` | the state vector as named blocks, a holdup or a composition array: `pack`, `unpack`, `names()` for `state_names`, `index` |
 | `state_measurement` | a measurement reading one state, by index or by its name in a layout |
 | `cached_design` | caches a slow design solve per worker process, as `jacketed_cstr` does |
+| `parameter_mismatch` | the `apply_mismatch` of a design dataclass whose model reads the parameters it is passed |
 | `fixed_point_residual` | the largest `rhs` at the design point and the states where it is largest, for a design that is not yet a steady state |
 
 ```python

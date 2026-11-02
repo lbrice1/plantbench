@@ -20,6 +20,7 @@ SPEC = {
 @pytest.mark.parametrize("path, keys", [
     ("tuning.reactor T.Kc", ["tuning", "reactor T", "Kc"]),
     ("params.reactor.U", ["params", "reactor.U"]),
+    ("mismatch.reactor.U", ["mismatch", "reactor.U"]),
     ("instruments.reactor C_A.deadtime", ["instruments", "reactor C_A", "deadtime"]),
     ("disturbance", ["disturbance"]),
     ("options.network", ["options", "network"]),
