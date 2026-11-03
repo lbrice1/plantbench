@@ -76,14 +76,48 @@ def test_an_ensemble_on_the_device_agrees_with_one_on_the_host(setup, tuning):
     assert host.status == dev.status == ["ok", "ok"]
     assert np.array_equal(host.steps, dev.steps) and np.array_equal(host.rejected, dev.rejected)
     # In units of the tolerance: a relative difference would be dominated by states that
-    # are zero to within atol, which neither device resolves further.  On the host, the
-    # device's batched inverse in place of LU moves a controller state by 0.065 of the
-    # tolerance, and the kernels' 2e-11 relative difference in the states amounts to at
-    # most 0.002.
+    # are zero to within atol, which neither device resolves further.  Before the device
+    # factorized by LU, its batched inverse, reproduced on the host, moved a controller
+    # state by 0.065 of the tolerance; the kernels' 2e-11 relative difference in the
+    # states amounts to at most 0.002.
     err = np.abs(dev.Y - host.Y) / (atol + rtol * np.abs(host.Y))
     m, k, i = np.unravel_index(np.argmax(err), err.shape)
     assert err[m, k, i] < 0.25, (f"member {m}, t = {host.t[k]}, state {i}: host "
                                 f"{host.Y[m, k, i]!r}, device {dev.Y[m, k, i]!r}")
+
+
+@pytest.mark.parametrize("case_id", ["ngl_deethanizer", "ngl_demethanizer"])
+def test_the_batched_lu_on_the_device_solves_as_the_host(case_id):
+    """The step's systems I / (h gamma) - J of three members of an NGL closed loop, N above
+    the 256 of CuPy's batched solve, factorized once and solved twice: residuals at
+    round-off, and the host's LU solution to the conditioning of the systems.  A member
+    whose matrix is singular gets NaN, and the others their solutions."""
+    from plantbench.core.ensemble import GAMMA, _factor
+    case = pb.load_case(case_id)
+    s = pb.build(case, case.config())
+    d, S = s.design, s.structure
+    y0 = np.concatenate([d.x, ctl.initial_augmented(S, d)])
+    J = ctl.jacobian_batched(0.0, y0, S, d.u, d.pp, None, d.rhs)
+    N = len(y0)
+    assert N > 256
+    h = np.array([1e-3, 1e-2, 1e-1])
+    W = np.eye(N) / (h * GAMMA)[:, None, None] - J
+    rng = np.random.default_rng(0)
+    host = _factor(W, np)
+    dev = _factor(backend.to_device(W, "cuda"), backend.module("cuda"))
+    for _ in range(2):
+        b = rng.standard_normal((3, N))
+        x = backend.to_host(dev(backend.to_device(b, "cuda")))
+        residual = np.abs(np.einsum("kij,kj->ki", W, x) - b).max(axis=1)
+        scale = np.abs(W).max(axis=(1, 2)) * np.abs(x).max(axis=1)
+        assert np.all(residual < 1e-12 * scale), residual / scale
+        ref = host(b)
+        cond = np.linalg.cond(W)
+        assert np.all(np.abs(x - ref).max(axis=1) < 1e-14 * cond * np.abs(ref).max(axis=1))
+    W[1, :, 5] = 0.0
+    x = backend.to_host(_factor(backend.to_device(W, "cuda"), backend.module("cuda"))(
+        backend.to_device(b, "cuda")))
+    assert np.isnan(x[1]).all() and np.isfinite(x[[0, 2]]).all()
 
 
 @pytest.mark.parametrize("case_id", ["jacketed_cstr", "reactor_separator_recycle",

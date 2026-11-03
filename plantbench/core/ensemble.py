@@ -102,13 +102,55 @@ class EnsembleRun:
 
 
 def _factor(W, xp):
-    """A solver for the stack of systems W (k, N, N), factorized once: by LU on the host,
-    by the batched inverse on a GPU (`cupy.linalg.inv`), one call for the stack."""
+    """A solver for the stack of systems W (k, N, N), factorized once by LU with partial
+    pivoting: by LAPACK on the host, by cuBLAS on a GPU (`_device_lu`)."""
     if xp is np:
         lu = lu_factor(W, check_finite=False)
         return lambda b: lu_solve(lu, b[..., None], check_finite=False)[..., 0]
-    inv = xp.linalg.inv(W)
-    return lambda b: xp.einsum("kij,kj->ki", inv, b)
+    return _DeviceLU(W, xp)
+
+
+class _DeviceLU:
+    """The batched LU of W (k, N, N) on a GPU, one `getrfBatched` call for the stack, and
+    its solve of a right-hand side b (k, N), one `getrsBatched` call.
+
+    Since cuBLAS stores matrices by columns, a C-ordered W reads as its transpose: the
+    factors are those of W^T; a solve with them transposed (`CUBLAS_OP_T`) solves
+    W x = b.  A member whose factorization finds an exactly zero pivot (`info` > 0) is
+    singular; its solutions are NaN, which the step treats as a failed one, rather than
+    what the zero pivot gives.
+    CuPy's own batched solve (`cupy.linalg.solve`) refactors W at every call and batches
+    only up to N = 256, below the NGL closed loops.  The factors and the pointers to them
+    are attributes, so that they live as long as the solver does."""
+
+    def __init__(self, W, cp):
+        self.cp, self.cublas = cp, cp.cuda.cublas
+        self.handle = cp.cuda.get_cublas_handle()
+        self.k, self.n, _ = W.shape
+        self.A = cp.array(W, dtype=cp.float64, order="C", copy=True)  # factorized in place
+        self.a_ptrs = self._pointers(self.A, self.n * self.n)
+        self.pivots = cp.empty((self.k, self.n), dtype=cp.int32)
+        info = cp.empty(self.k, dtype=cp.int32)
+        self.cublas.dgetrfBatched(self.handle, self.n, self.a_ptrs.data.ptr, self.n,
+                                  self.pivots.data.ptr, info.data.ptr, self.k)
+        self.singular = info != 0
+
+    def _pointers(self, a, size: int):
+        """The device addresses of the k consecutive blocks of `size` doubles in `a`."""
+        return self.cp.arange(a.data.ptr, a.data.ptr + a.nbytes, size * a.itemsize,
+                              dtype=self.cp.uintp)
+
+    def __call__(self, b):
+        cp = self.cp
+        B = cp.array(b, dtype=cp.float64, order="C", copy=True)  # overwritten by x
+        b_ptrs = self._pointers(B, self.n)
+        status = np.zeros(1, dtype=np.int32)  # a parameter error, reported on the host
+        self.cublas.dgetrsBatched(self.handle, self.cublas.CUBLAS_OP_T, self.n, 1,
+                                  self.a_ptrs.data.ptr, self.n, self.pivots.data.ptr,
+                                  b_ptrs.data.ptr, self.n, status.ctypes.data, self.k)
+        if status[0] != 0:
+            raise RuntimeError(f"getrsBatched: parameter {-status[0]} is invalid")
+        return cp.where(self.singular[:, None], cp.nan, B)
 
 
 def integrate_ensemble(design, structures: list, disturbances: list, t_end: float,
