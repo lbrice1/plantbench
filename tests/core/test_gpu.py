@@ -112,7 +112,15 @@ def test_an_ensemble_stepper_on_the_device_steps_as_on_the_host():
                for v in (330.0, 340.0)]
     host = EnsembleStepper.from_configs(case, configs, 0.5)
     dev = EnsembleStepper.from_configs(case, configs, 0.5, device="cuda")
+    # In units of the tolerance, as for the ensemble above, but without equal steps: the
+    # device's arithmetic can change an accepted step, after which the two integrations
+    # agree to the order of the tolerance rather than in the last bits.  On an
+    # A100-SXM4-80GB, member 0 takes 275 evaluations in its fifth step to the host's 259
+    # and then differs by 0.328 of the tolerance; at rtol 1e-10 and atol 1e-12, by 0.020.
+    # Member 1, whose steps do not change, differs by at most 5.99e-14 relative.
     for _ in range(10):
         a, b = host.step(), dev.step()
         for i in range(2):
-            np.testing.assert_allclose(b.steps[i].x, a.steps[i].x, rtol=1e-9)
+            x = a.steps[i].x
+            err = np.abs(b.steps[i].x - x) / (host.atol + host.rtol * np.abs(x))
+            assert np.max(err) < 1.0, f"t = {a.steps[i].t}, member {i}: {err}"
