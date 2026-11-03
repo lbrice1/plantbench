@@ -9,6 +9,8 @@ import pytest
 
 pytest.importorskip("thermo")
 
+from _pole import POLE_K, POLE_K0, POLE_Z  # noqa: E402
+
 from plantbench.units import peng_robinson as prm  # noqa: E402
 from plantbench.units.peng_robinson import Components, PengRobinson  # noqa: E402
 
@@ -287,3 +289,18 @@ def test_rachford_rice_ignores_absent_components_and_the_batch(pr):
     np.testing.assert_allclose(r, 0.0, atol=1e-12)
     f = pr.flash_PT(np.array([297.52, 197.34]), np.array([3243388.70, 4622565.31]), z)
     assert np.all(np.isfinite(f.V))
+
+
+
+def test_rachford_rice_stops_beside_a_pole(pr):
+    """Started from 1.0037211635987813, the row took a Newton step onto the pole itself,
+    where the sum is infinite, and came back NaN; the flash did too.  The row now stops
+    short of the pole, and the flash finds the stream all vapor."""
+    z, K = np.array([POLE_Z]), np.array([POLE_K])
+    beta = prm._rachford_rice(z, K, np.array([1.0037211635987813]))
+    pole = 1.0 / (1.0 - K.min())
+    assert np.isfinite(beta[0]) and 1.0 < beta[0] < pole
+    f = pr.flash_PT(np.array([255.23591130361294]), np.array([820671.9196923358]), z,
+                    K0=np.array([POLE_K0]))
+    assert f.V[0] == 1.0
+    np.testing.assert_array_equal(f.y, z)

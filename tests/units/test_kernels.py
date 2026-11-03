@@ -16,6 +16,8 @@ import pytest
 
 pytest.importorskip("thermo")
 
+from _pole import POLE_K, POLE_Z  # noqa: E402
+
 from plantbench import backend  # noqa: E402
 from plantbench.units import _kernels  # noqa: E402
 from plantbench.units import peng_robinson as prm  # noqa: E402
@@ -135,6 +137,17 @@ def test_the_rachford_rice_row_compiled_for_the_host_is_the_numpy_one(eos, rows,
     np.testing.assert_allclose(beta, prm._rachford_rice(x, K, beta0), rtol=0, atol=1e-12)
 
 
+def test_the_rachford_rice_row_compiled_for_the_host_stops_beside_a_pole(host):
+    """The row of `test_rachford_rice_stops_beside_a_pole` (test_peng_robinson.py), whose
+    root lies within 1e-9 of the pole: finite, and the NumPy row's to the last bit."""
+    z, K = np.array([POLE_Z]), np.array([POLE_K])
+    beta0, beta = np.array([1.0037211635987813]), np.empty(1)
+    host.host_rachford_rice(ctypes.c_int(1), ctypes.c_int(z.shape[1]), _p(z), _p(K),
+                            _p(beta0), ctypes.c_double(1e-14), ctypes.c_int(100), _p(beta))
+    assert np.isfinite(beta[0])
+    np.testing.assert_array_equal(beta, prm._rachford_rice(z, K, beta0))
+
+
 def test_a_flash_of_the_rows_on_the_host_is_finite(eos, rows):
     """The reference of the device flash below: finite on every row, so that the
     comparison, which takes NaN for equal to NaN, compares numbers."""
@@ -170,6 +183,16 @@ def test_rachford_rice_on_the_device_is_the_numpy_one(eos, rows):
     d = lambda v: backend.to_device(v, "cuda")  # noqa: E731
     got = backend.to_host(prm._rachford_rice(d(x), d(K), d(beta0)))
     np.testing.assert_allclose(got, prm._rachford_rice(x, K, beta0), rtol=0, atol=1e-12)
+
+
+@pytest.mark.gpu
+@pytest.mark.skipif(not backend.available("cuda"), reason="no CuPy or no GPU")
+def test_rachford_rice_on_the_device_stops_beside_a_pole():
+    z, K, beta0 = np.array([POLE_Z]), np.array([POLE_K]), np.array([1.0037211635987813])
+    d = lambda v: backend.to_device(v, "cuda")  # noqa: E731
+    got = backend.to_host(prm._rachford_rice(d(z), d(K), d(beta0)))
+    assert np.isfinite(got[0])
+    np.testing.assert_allclose(got, prm._rachford_rice(z, K, beta0), rtol=0, atol=1e-12)
 
 
 @pytest.mark.gpu
