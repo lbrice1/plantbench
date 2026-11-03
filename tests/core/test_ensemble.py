@@ -17,7 +17,7 @@ from scipy.integrate import solve_ivp
 
 from plantbench.core import control as ctl
 from plantbench.core import disturbances as dist
-from plantbench.core.ensemble import integrate_ensemble
+from plantbench.core.ensemble import _A, _C, _H, GAMMA, STAGES, _c, _d, _dense, integrate_ensemble
 from plantbench.core.instruments import Actuator, Instrument
 
 
@@ -138,17 +138,70 @@ class _VanDerPol:
 
 
 def test_rodas5p_converges_at_fifth_order():
-    """At a tolerance every step passes, the steps grow to the grid spacing and stay there,
-    so the error at the end measures the order of the method."""
+    """At a tolerance every step passes and with the steps ending on the grid, the steps
+    grow to the grid spacing and stay there, so the error at the end measures the order of
+    the method."""
     design = _VanDerPol(x=np.array([2.0, 0.0]), u=_NoInputs())
     ref = solve_ivp(lambda t, y: design.rhs(t, y, None, None), (0.0, 1.0), design.x,
                     method="DOP853", rtol=1e-14, atol=1e-14).y[:, -1]
     errors = []
     for n in (10, 20, 40):
-        r = integrate_ensemble(design, [[]], [None], 1.0, n_points=n + 1, rtol=1.0, atol=1.0)
+        r = integrate_ensemble(design, [[]], [None], 1.0, n_points=n + 1, rtol=1.0, atol=1.0,
+                               dense=False)
         errors.append(np.max(np.abs(r.Y[0, -1] - ref)))
     rates = np.log2(np.array(errors[:-1]) / np.array(errors[1:]))
     assert np.all(rates > 4.5), (errors, rates)
+
+
+def _rodas5p_step(lam, t, y, h):
+    """One Rodas5P step of y' = lam (y - sin t) + cos t, whose solution from y = sin t is
+    sin t: the step's end and its kd = H k."""
+    def f(t, y):
+        return lam * (y - np.sin(t)) + np.cos(t)
+    f_t = -lam * np.cos(t) - np.sin(t)
+    W = 1.0 / (h * GAMMA) - lam
+    k: list = []
+    for i in range(STAGES):
+        yi = y + sum(_A[i, j] * k[j] for j in range(i))
+        b = f(t + _c[i] * h, yi) + h * _d[i] * f_t + sum(_C[i, j] / h * k[j] for j in range(i))
+        k.append(b / W)
+    y1 = y + sum(_A[STAGES - 1, j] * k[j] for j in range(STAGES - 1)) + k[-1]
+    return y1, _H @ np.array(k)
+
+
+@pytest.mark.parametrize("lam", [-1.0, -1e4])
+def test_the_dense_output_converges_at_the_order_of_the_step(lam):
+    """The error of the dense output inside a step falls as h^5, as that of the step's end
+    does, on a mild and on a stiff problem (Prothero and Robinson, 1974)."""
+    theta = np.array([0.2, 0.5, 0.8])
+    errors = []
+    for h in (0.2, 0.1, 0.05):
+        y1, kd = _rodas5p_step(lam, 0.0, 0.0, h)
+        y = _dense(np.array([0.0]), np.array([y1]), kd[:, None], theta)[:, 0]
+        errors.append(np.max(np.abs(y - np.sin(theta * h))))
+    rates = np.log2(np.array(errors[:-1]) / np.array(errors[1:]))
+    assert np.all(rates > 4.8), (errors, rates)
+
+
+@pytest.mark.parametrize("n_points", [11, 101, 1001])
+def test_the_dense_output_is_as_close_to_the_solution_as_the_steps(n_points):
+    """Van der Pol over 5 time units: the grid values of the dense output and those of
+    steps ending on the grid are both within 1.5 tolerances of the solution, scaled by the
+    size of each state; the dense output takes the same steps on any grid."""
+    design = _VanDerPol(x=np.array([2.0, 0.0]), u=_NoInputs())
+    t = np.linspace(0.0, 5.0, n_points)
+    ref = solve_ivp(lambda t, y: design.rhs(t, y, None, None), (0.0, 5.0), design.x,
+                    method="DOP853", rtol=1e-13, atol=1e-13, t_eval=t).y.T
+    rtol, atol = 1e-8, 1e-10
+    scale = atol + rtol * np.max(np.abs(ref), axis=0)
+    runs = [integrate_ensemble(design, [[]], [None], 5.0, n_points=n_points, rtol=rtol,
+                               atol=atol, dense=dense) for dense in (True, False)]
+    for r in runs:
+        np.testing.assert_array_equal(r.t, t)
+        assert np.max(np.abs(r.Y[0] - ref) / scale) < 1.5
+    coarse = integrate_ensemble(design, [[]], [None], 5.0, n_points=2, rtol=rtol, atol=atol)
+    assert runs[0].steps[0] == coarse.steps[0] <= runs[1].steps[0]
+    np.testing.assert_array_equal(runs[0].Y[0, -1], coarse.Y[0, -1])
 
 
 def _lsoda(design, S, d, t_end, n_points):

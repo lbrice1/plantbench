@@ -13,12 +13,19 @@ the start of every step and solves linear systems instead of Newton iterations, 
 what makes the lockstep possible: every member does the same, fixed work per step.  It was
 chosen over BDF and Rosenbrock-W methods on the step, Jacobian and evaluation counts of
 the serial NGL cases.  The coefficients are those of OrdinaryDiffEq.jl (`RODAS5PA`,
-`RODAS5PC`, `RODAS5Pc`, `RODAS5Pd`), in the transformed form of Hairer and Wanner (1996,
-IV.7.26):
+`RODAS5PC`, `RODAS5Pc`, `RODAS5Pd`, `RODAS5PH`), in the transformed form of Hairer and
+Wanner (1996, IV.7.26):
 
     (I / (h gamma) - J) k_i = f(t + c_i h, y + sum_j A_ij k_j) + h d_i df/dt
                               + sum_j (C_ij / h) k_j,
     y_1 = y + sum_j A_8j k_j + k_8,   error = k_8.
+
+Between the ends of a step the solution is the method's dense output (`RODAS5PH`), with
+kd_m = sum_i H_mi k_i and theta = (t - t_n) / h:
+
+    y(theta) = (1 - theta) y + theta (y_1 + (1 - theta) (kd_1 + theta (kd_2 + theta kd_3))),
+
+whose local error is of the order of the step's.
 
 The integration agrees with LSODA's to the tolerance, not to the last bit.
 """
@@ -62,6 +69,13 @@ _C = np.array([
      -19.097331116725623, -28.087943162872662, 0],
     [37.80277123390563, -3.2571969029072276, 112.26918849496327, 66.9347231244047,
      -40.06618937091002, -54.66780262877968, -9.48861652309627]])
+_H = np.array([
+    [25.948786856663858, -2.5579724845846235, 10.433815404888879, -2.3679251022685204,
+     0.524948541321073, 1.1241088310450404, 0.4272876194431874, -0.17202221070155493],
+    [-9.91568850695171, -0.9689944594115154, 3.0438037242978453, -24.495224566215796,
+     20.176138334709044, 15.98066361424651, -6.789040303419874, -6.710236069923372],
+    [11.419903575922262, 2.8879645146136994, 72.92137995996029, 80.12511834622643,
+     -52.072871366152654, -59.78993625266729, -0.15582684282751913, 4.883087185713722]])
 _c = np.array([0.0, 0.6358126895828704, 0.4095798393397535, 0.9769306725060716,
                0.4288403609558664, 1.0, 1.0, 1.0])
 _d = np.array([0.21193756319429014, -0.42387512638858027, -0.3384627126235924,
@@ -99,6 +113,13 @@ class EnsembleRun:
     nfev: np.ndarray
     wall_time: float
     at_breaks: list = field(default_factory=list)
+
+
+def _dense(y0, y1, kd, theta):
+    """The dense output of one step from y0 to y1 with kd = H k, at the fractions `theta`
+    of the step: (len(theta), n)."""
+    th = np.asarray(theta)[:, None]
+    return (1 - th) * y0 + th * (y1 + (1 - th) * (kd[0] + th * (kd[1] + th * kd[2])))
 
 
 def _factor(W, xp):
@@ -157,7 +178,8 @@ def integrate_ensemble(design, structures: list, disturbances: list, t_end: floa
                        n_points: int = 1200, rtol: float = 1e-8, atol: float = 1e-10,
                        wall_budget: float | None = None, device: str = "cpu",
                        max_steps: int = 100_000, starts: list | None = None,
-                       t0: float = 0.0, y0: list | None = None) -> EnsembleRun:
+                       t0: float = 0.0, y0: list | None = None,
+                       dense: bool = True) -> EnsembleRun:
     """Integrate the closed loops of `structures`, member i under `disturbances[i]`, from
     the design point, or from the plant state `starts[i]` where it is given, to `t_end`,
     all on the grid of `n_points` from 0 to `t_end`.  Given `y0`, member i starts instead
@@ -165,9 +187,11 @@ def integrate_ensemble(design, structures: list, disturbances: list, t_end: floa
     `t0`: what the ensemble stepper needs to continue from where its members are.
 
     The design must declare a batched right-hand side that does not depend on t.  Every
-    step of a member ends on its breakpoints (`control.breakpoints_of`) and on the output
-    grid, so the grid values are the solution itself, not an interpolation.  A member
-    stops as "failed" when its step size falls below round-off of its time, after
+    step of a member ends on its breakpoints (`control.breakpoints_of`) and at `t_end`.
+    The grid values between are the method's dense output, from the step they fall in,
+    which never crosses a breakpoint.  With `dense=False` the steps end on the grid too, so
+    that the grid values are the steps' own, at the cost of the steps the grid shortens.
+    A member stops as "failed" when its step size falls below round-off of its time, after
     `max_steps` steps, or when its state is non-finite at the smallest step; the others
     go on.  When `wall_budget` seconds have passed, every member still running stops as
     "timeout"."""
@@ -195,11 +219,12 @@ def integrate_ensemble(design, structures: list, disturbances: list, t_end: floa
         Y0 = np.array([np.asarray(y, dtype=float) for y in y0])
     N = Y0.shape[1]
     grid = np.linspace(t0, t_end, n_points)
-    # Where each member's steps must end: its breakpoints and the grid after its start.
-    stops = [np.union1d(grid[1:], [b for b in ctl.breakpoints_of(d, S) if t0 < b < t_end])
+    # Where each member's steps must end: its breakpoints and t_end, and the grid after its
+    # start without dense output.
+    ends = grid[1:] if not dense else [t_end]
+    stops = [np.union1d(ends, [b for b in ctl.breakpoints_of(d, S) if t0 < b < t_end])
              for S, d in zip(structures, disturbances)]
     breaks = [set(ctl.breakpoints_of(d, S)) for S, d in zip(structures, disturbances)]
-    slot = {float(v): k for k, v in enumerate(grid)}
 
     y = xp.asarray(Y0)
     J = xp.zeros((M, N, N))
@@ -209,6 +234,7 @@ def integrate_ensemble(design, structures: list, disturbances: list, t_end: floa
     h = np.full(M, H0)
     at_breaks: list[dict[float, np.ndarray]] = [{} for _ in range(M)]
     nxt = np.zeros(M, dtype=int)
+    filled = np.ones(M, dtype=int)  # the first grid point of each member not yet given
     stale = np.ones(M, dtype=bool)
     status = ["running"] * M
     message = [""] * M
@@ -216,6 +242,7 @@ def integrate_ensemble(design, structures: list, disturbances: list, t_end: floa
     running = np.ones(M, dtype=bool)
     # Indices into the device arrays are moved there; the bookkeeping stays on the host.
     ix = xp.asarray
+    H = xp.asarray(_H)
 
     def rhs(t_m, Y_m, members):
         """The right-hand sides of `members` at their times t_m and states Y_m."""
@@ -304,12 +331,26 @@ def integrate_ensemble(design, structures: list, disturbances: list, t_end: floa
             steps[acc] += 1
             stale[acc] = True
             done_y = to_host(y1[ix(ok)])
+            # The grid points each accepted step reaches: one it ends on takes the step's
+            # own state, those before its end the dense output.
+            last = np.searchsorted(grid, t[acc], side="right")
+            within = [np.arange(filled[i], last[k]) for k, i in enumerate(acc)]
+            within = [g[grid[g] < t[i]] for g, i in zip(within, acc)]
+            need = np.flatnonzero([g.size > 0 for g in within])
+            if need.size:
+                rows = ix(np.flatnonzero(ok)[need])
+                kd = to_host(xp.einsum("mi,ikn->kmn", H,
+                                       xp.stack([k_i[rows] for k_i in k_stages])))
+                y_in = to_host(y_a[rows])
+                for q, k in enumerate(need):
+                    theta = (grid[within[k]] - t_a[ok][k]) / hs[ok][k]
+                    out[acc[k], within[k]] = _dense(y_in[q], done_y[k], kd[q], theta)
             for k, i in enumerate(acc):
+                if last[k] > filled[i] and grid[last[k] - 1] == t[i]:
+                    out[i, last[k] - 1] = done_y[k]
+                filled[i] = max(filled[i], last[k])
                 if not landed[k]:
                     continue
-                g = slot.get(float(t[i]))
-                if g is not None:
-                    out[i, g] = done_y[k]
                 if float(t[i]) in breaks[i]:
                     h[i] = min(h[i], H0)
                     at_breaks[i][float(t[i])] = done_y[k]
