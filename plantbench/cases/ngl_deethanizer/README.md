@@ -200,7 +200,7 @@ The inferred ethane recovery moves by up to 0.11 at a feed-flow step. The feed r
 
 ## Comparison with the tuned HYSYS case
 
-`hysys_reference.config()` is the configuration of the comparison: `composition cascade`, the structure the HYSYS case runs, at the design of the HYSYS set-points, which is the design of every structure. `tests/cases/ngl_deethanizer/test_hysys_inspection.py` compares it with the inspection at one criterion per kind of quantity: product flows and compositions within 1 %, internal flows within 3 %, duties within 5 %, temperatures within 1 K. A quantity outside its criterion is asserted as an exception.
+`hysys_reference.config()` is the configuration of the comparison: `composition cascade`, the structure the HYSYS case runs, at the design of the HYSYS set-points, which is the design of every structure. `tests/cases/ngl_deethanizer/test_hysys_inspection.py` compares it with the inspection at one criterion per kind of quantity: product flows and compositions within 1 %, internal flows within 3 %, duties within 5 %, temperatures within 1 K. A quantity outside its criterion is asserted as an exception. With `tuning="hysys"`, the HYSYS tuning of TIC-101 and XIC-100, the configuration is damped at 0.206, with its slowest mode at 5.1 min, against 0.427 and 15.4 min.
 
 | Quantity | HYSYS, inspection | This case | Criterion |
 |---|---|---|---|

@@ -119,7 +119,7 @@ A negative gain means that raising the manipulated variable lowers the measureme
 | XIC-100 | 0 to 1 | 0 to 2722 kW | 1.0 | 120 |
 | RFIC-100 | 0 to 1 | 0 to 50 kW | 0.5 | 30 |
 
-ERIC-100 is tuned for this case, for damping. The tuned HYSYS case has its own ERIC-100, on the TIC-100 set-point at 0.005 %/% and 3 s, with an output range of −50 to 0 °C, holding a recovery of 0.82 (inspection). On the ratio it has a positive gain: at a fixed TK-100 temperature, raising R by 5 % raises the recovery by 0.0064 under both gsp and crr, because less of the TK-100 vapor goes to the branch.
+ERIC-100 is tuned for this case, for damping. The tuned HYSYS case has its own ERIC-100, on the TIC-100 set-point at 0.005 %/% and 3 s, with an output range of −50 to 0 °C, holding a recovery of 0.82 (inspection). `hysys_reference.config(tuning="hysys")` applies that tuning: −0.25 K per unit recovery, 0.05 min and −50 to 0 °C, with the PV span taken as the whole of a fraction and the action as this case's, since the inspection gives neither [choice]. At the design of a recovery of 0.82, the recovery cascade is damped at 0.508 under it, with its slowest mode at 13.9 min, against 0.475 and 29.5 min under this case's tuning. On the ratio it has a positive gain: at a fixed TK-100 temperature, raising R by 5 % raises the recovery by 0.0064 under both gsp and crr, because less of the TK-100 vapor goes to the branch.
 
 The damping ratio of each structure is the smallest among the oscillatory modes of the closed loop linearized at the design point. The values below are from `studies/ngl_demethanizer/tuning.py`.
 

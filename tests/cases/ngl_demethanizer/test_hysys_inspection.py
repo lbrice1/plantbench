@@ -88,6 +88,29 @@ def test_the_residue_gas_leaving_e100_is_an_exception(y):
     assert TEMPERATURE < abs(y["overhead temperature leaving E-100"] - S["5"]["T_C"]) < 2.5
 
 
+def test_the_hysys_tuning_of_eric100():
+    """0.005 %/% over a span of 0 to 1 [choice] and -50 to 0 C, 3 s, direct-acting
+    [choice]: -0.25 K per unit recovery and 0.05 min."""
+    assert H.HYSYS_TUNING["ethane recovery"] == pytest.approx(
+        {"Kc": -0.25, "tau_I": 0.05, "lo": -50.0, "hi": 0.0})
+
+
+def test_the_hysys_tuning_reaches_eric100_only():
+    hysys = {e.name: e for e in pb.build(CASE, H.config(tuning="hysys")).structure}
+    own = {e.name: e for e in pb.build(CASE, H.config()).structure}
+    for field, value in H.HYSYS_TUNING["ethane recovery"].items():
+        assert getattr(hysys["ethane recovery"], field) == pytest.approx(value)
+    for name in own.keys() - {"ethane recovery"}:
+        assert (hysys[name].Kc, hysys[name].tau_I) == (own[name].Kc, own[name].tau_I)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("tuning", H.TUNINGS)
+def test_the_recovery_cascade_is_stable_under_either_tuning(tuning):
+    ev = pb.build(CASE, H.config(tuning=tuning)).spectrum()
+    assert ev.real.max() < 0
+
+
 def test_an_unknown_tuning_is_refused():
     with pytest.raises(ValueError, match="tuning must be one of"):
         H.config(tuning="detuned")
