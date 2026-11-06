@@ -29,6 +29,7 @@ plantbench generate examples/04_dataset.toml --workers 8
 |---|---|---|
 | `reactor_separator_recycle` | 134 (base plant) | A non-isothermal CSTR on the open-loop unstable branch of its multiplicity, in a recycle loop closed by a thirty-stage column with a purge; four heat-exchanger networks at three column pressures; four regulatory structures. Extends the reactor control example of Romagnoli and Palazoglu (2020); frozen. |
 | `jacketed_cstr` | 3 | The same reactor on its own, with three steady states and structures from open loop to a composition cascade. |
+| `mma_polymerization_cstr` | 4 | The isothermal free-radical polymerization of methyl methacrylate of Doyle, Ogunnaike and Pearson (1995), the initiator flow setting the number-average molecular weight across three grades; structures from open loop to a NAMW loop, and an engineering model without chain transfer as a mismatch. |
 | `ngl_demethanizer` | 299–406 (by scheme and basis) | The demethanizer section of a cryogenic NGL recovery plant in the conventional, gas subcooled and cold residue recycle schemes, a modified version of Chebeir, Salas and Romagnoli (2019); Peng–Robinson thermodynamics; regulatory structure and two recovery cascades. |
 | `ngl_deethanizer` | 354 | A 30-stage deethanizer with feed heater, total condenser and reboiler, constructed from an unpublished HYSYS case; Peng–Robinson thermodynamics; regulatory structure and a composition cascade. |
 

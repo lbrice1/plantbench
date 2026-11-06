@@ -1,4 +1,5 @@
-"""The batched right-hand sides of `jacketed_cstr` and `reactor_separator_recycle`.
+"""The batched right-hand sides of `jacketed_cstr`, `reactor_separator_recycle` and
+`mma_polymerization_cstr`.
 
 A batch row is the one state evaluated alone, whatever the batch around it; the batched
 balances conserve what the scalar ones do; and an ensemble, which needs a batched
@@ -16,6 +17,7 @@ from plantbench.units import column as col
 
 CSTR = pb.load_case("jacketed_cstr")
 RSR = pb.load_case("reactor_separator_recycle")
+MMA = pb.load_case("mma_polymerization_cstr")
 
 
 def _states(setup, m, seed=0, spread=1e-2):
@@ -24,7 +26,8 @@ def _states(setup, m, seed=0, spread=1e-2):
     return d.x * (1.0 + spread * rng.standard_normal((m, len(d.x))))
 
 
-@pytest.fixture(scope="module", params=["jacketed_cstr", "reactor_separator_recycle"])
+@pytest.fixture(scope="module", params=["jacketed_cstr", "reactor_separator_recycle",
+                                                 "mma_polymerization_cstr"])
 def setup(request):
     case = pb.load_case(request.param)
     return pb.build(case, case.config("open loop") if "open loop" in case.structures
@@ -94,6 +97,8 @@ def test_the_heat_integrated_plants_are_not_batched():
             for v in (330.0, 340.0)], 200.0, 0.5),
     (RSR, [RSR.config(disturbance={"name": "throughput", "fraction": f, "t": 5.0})
            for f in (0.05, 0.1)], 60.0, 1.0),
+    (MMA, [MMA.config("NAMW PI", setpoint_steps={"NAMW": [[5.0, step]]})
+           for step in (15_000.0, -7_000.0)], 120.0, 1.0),
 ])
 def test_an_ensemble_of_a_reactor_case_agrees_with_run(case, configs, t_end, dt):
     """Rodas5P against LSODA, to the tolerance: 1e-6 of each measurement, relative."""
