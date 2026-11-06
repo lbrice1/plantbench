@@ -89,6 +89,9 @@ class DeethanizerParameters:
     # column that its pressure barely moves the flow, which is not modeled.
     F_VLV101_max: float = 312.7 / 60 / 0.4456  # kmol/min
     F_VLV102_max: float = 312.3 / 60 / 0.4063  # kmol/min
+    # Informational: no equation uses them, the valves being linear in opening and the
+    # products reported before their let-down (README, Comparison with the tuned HYSYS
+    # case).
     P_distillate: float = 2010.0  # kPa, downstream of VLV-101
     P_LPG: float = 1790.0  # kPa, downstream of VLV-102
 

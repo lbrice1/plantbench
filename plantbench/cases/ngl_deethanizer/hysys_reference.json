@@ -663,5 +663,49 @@
   "spacing_m": 0.55,
   "holdup_m3": 0.3074,
   "active_area_m2": 4.39729633
+ },
+ "inspection": {
+  "source": "Aspen HYSYS 12, 'Deethanizer - Tuned (1).hsc', SHA256 4bfe9b22423e7fd1a0738f41228ba64c44c5bf0aa694b50a34229cb9c6592cbd, read through the HYSYS COM interface with the integrator stopped; a saved dynamic snapshot, not a steady state solved for the comparison",
+  "distillate_kmol_h": 312.756,
+  "LPG_kmol_h": 312.255,
+  "ethane_in_distillate": 0.959242,
+  "ethane_in_LPG": 0.02,
+  "reflux_kmol_h": 367.38,
+  "vapor_to_condenser_kmol_h": 679.913,
+  "boilup_kmol_h": 608.615,
+  "E-100_duty_kW": 420.248,
+  "condenser_duty_saved_kW": 1598.442,
+  "condenser_duty_from_streams_kW": 1757.556,
+  "reboiler_duty_kW": 2399.06,
+  "E-100_outlet_vapor_fraction": 0.0229675,
+  "condenser_liquid_T_C": -2.626,
+  "reboiler_liquid_T_C": 100.308,
+  "stage_28_T_C": 71.16,
+  "pressure_kPa": {
+   "tray 1": 2453.0,
+   "tray 30": 2469.756,
+   "To Reboiler": 2474.906,
+   "reboiler vapor": 2469.752,
+   "bottom product": 2472.486,
+   "reflux": 2462.542
+  },
+  "liquid_holdup_kmol": {
+   "condenser": 11.782,
+   "reboiler": 6.86
+  },
+  "products": {
+   "Ethane Production": {
+    "T_C": -10.054,
+    "VF": 0.086
+   },
+   "LPG": {
+    "T_C": 86.346,
+    "VF": 0.2046
+   }
+  },
+  "valve_Cv": {
+   "VLV-101": 18.0,
+   "VLV-102": 29.0
+  }
  }
 }

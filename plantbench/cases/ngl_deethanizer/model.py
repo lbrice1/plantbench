@@ -13,7 +13,7 @@ Units and their models:
     the drum's vapor space, which fills with the vapor leaving stage 1 and empties as
     the condenser duty condenses it to the drum liquid.
   * The reflux is an input, a flow: FIC-101, which sets it in the HYSYS case, has an
-    integral time of half a second and is taken as ideal.  The products leave through
+    integral time of 0.0088 s and is taken as ideal.  The products leave through
     linear valves whose flow is their opening times their flow at full opening.
 
 States, in kmol, mole fractions, K and kPa:

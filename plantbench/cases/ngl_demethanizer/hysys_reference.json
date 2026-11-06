@@ -955,5 +955,27 @@
   "K-101": 8079.2905,
   "K-102": 25.0142905
  },
- "ethane_recovery": 0.8204050968785553
+ "ethane_recovery": 0.8204050968785553,
+ "inspection": {
+  "source": "Aspen HYSYS 12, 'Demethanizer - Tuned(1).hsc', SHA256 56c4c73b4217767e070c4aa0ec699458c82405edd8541a94c743b244ec72a0a7, read through the HYSYS COM interface with the integrator stopped; a saved dynamic snapshot, not a steady state solved for the comparison",
+  "NGL_kmol_h": 561.13,
+  "chiller_duty_kW": 3498.26,
+  "reboiler_duty_kW": 1522.42,
+  "expander_power_kW": 1154.55,
+  "K-101_power_kW": 8079.16,
+  "K-102_power_kW": 25.01,
+  "RIC-100": {
+   "setpoint": 0.69,
+   "measure": "F18 / F17, the branch (bypass vapor and branch liquid) over the expander flow",
+   "output": "Q3, the shaft energy of the expander and the booster"
+  },
+  "ERIC-100": {
+   "setpoint": 0.82,
+   "Kc_percent": 0.005,
+   "Ti_s": 3.0,
+   "OP_min_C": -50.0,
+   "OP_max_C": 0.0,
+   "output": "the TIC-100 set-point"
+  }
+ }
 }
