@@ -21,7 +21,7 @@ CASES = [*pb.list_cases(), "template"]
 @pytest.fixture(scope="module", params=CASES)
 def case(request):
     if request.param == "template":
-        from plantbench.cases._template.definition import CASE
+        from plantbench.cases.template import CASE
         return CASE
     return pb.load_case(request.param)
 

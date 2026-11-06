@@ -33,6 +33,17 @@ from plantbench.backend import namespace
 from .parameters import ColumnParameters
 
 N_SPECIES = 3
+# The right-hand-side evaluations one integration to steady state may take.  A design that
+# solves takes at most about 260 000 in one settle (64 parameter draws of the reactor's
+# k0, U and dH around the reference, with SciPy 1.16.3 and 1.18.1, 30 Oct 2026; the
+# reference design about 11 000).  One draw has been seen to settle for more than 90 s
+# inside the plantwide residual without ending.  A count, unlike a wall-clock limit, gives
+# the same verdict on any machine.
+MAX_SETTLE_EVALUATIONS = 1_000_000
+
+
+class SettleLimitExceeded(RuntimeError):
+    """The column's integration to steady state used up its right-hand-side evaluations."""
 
 
 def n_states(cp: ColumnParameters) -> int:
@@ -72,9 +83,10 @@ def equilibrium(x: np.ndarray, alpha: np.ndarray) -> np.ndarray:
     # Clamp before normalizing.  A stiff transient, or an off-design iterate inside
     # the flowsheet solver, can push a mole fraction slightly negative; without the
     # clamp the normalization divides by zero and the whole integration derails.
-    num = alpha * np.maximum(x, 0.0)
+    xp = namespace(x)
+    num = alpha * xp.maximum(x, 0.0)
     total = num.sum(axis=-1, keepdims=True)
-    return num / np.where(total > 0.0, total, 1.0)
+    return num / xp.where(total > 0.0, total, 1.0)
 
 
 def weir_flow(M: np.ndarray, cp: ColumnParameters) -> np.ndarray:
@@ -187,6 +199,70 @@ def rhs(
     return pack(dMD, dxD, dM, dx, dMB, dxB)
 
 
+def rhs_batch(
+    Z,
+    cp: ColumnParameters,
+    F,
+    zF,
+    q: float,
+    V,
+    L_reflux,
+    D,
+    Bm,
+):
+    """`rhs` at a batch of m states, Z (m, n_states), with each flow (m,) and zF (m, 3):
+    the same balances, written over a leading axis, on NumPy or CuPy.  `rhs` itself is
+    kept as it is, since the frozen results of `reactor_separator_recycle` are computed
+    with it."""
+    xp = namespace(Z)
+    nt, ns, m = cp.n_trays, N_SPECIES, Z.shape[0]
+    alpha = xp.asarray(cp.alpha, dtype=float)
+    MD, xD = Z[:, 0], Z[:, 1:1 + ns]
+    M = Z[:, 1 + ns:1 + ns + nt]
+    x = Z[:, 1 + ns + nt:1 + ns + nt + nt * ns].reshape(m, nt, ns)
+    MB, xB = Z[:, 1 + ns + nt + nt * ns], Z[:, 2 + ns + nt + nt * ns:]
+
+    ft = cp.feed_tray - 1
+    FL = q * F
+    FV = (1.0 - q) * F
+    y = equilibrium(x, alpha)
+    yB = equilibrium(xB, alpha)
+    L = weir_flow(M, cp)
+
+    L_in = xp.concatenate([L_reflux[:, None], L[:, :-1]], axis=1)
+    x_in = xp.concatenate([xD[:, None], x[:, :-1]], axis=1)
+    V_out = xp.where(xp.arange(nt) <= ft, (V + FV)[:, None], V[:, None])
+    V_in = xp.concatenate([V_out[:, 1:], V[:, None]], axis=1)
+    y_in = xp.concatenate([y[:, 1:], yB[:, None]], axis=1)
+    on_feed = (xp.arange(nt) == ft).astype(float)
+    feed_L = FL[:, None] * on_feed
+    feed_V = FV[:, None] * on_feed
+    feed_z = on_feed[None, :, None] * zF[:, None, :]
+
+    dM = L_in + feed_L + V_in - L - V_out
+    dMx = (
+        L_in[..., None] * x_in
+        + feed_L[..., None] * feed_z
+        + V_in[..., None] * y_in
+        + feed_V[..., None] * feed_z
+        - L[..., None] * x
+        - V_out[..., None] * y
+    )
+    dx = (dMx - x * dM[..., None]) / M[..., None]
+
+    V_top = V_out[:, 0]
+    dMD = V_top - L_reflux - D
+    dMDx = V_top[:, None] * y[:, 0] - (L_reflux + D)[:, None] * xD
+    dxD = (dMDx - xD * dMD[:, None]) / MD[:, None]
+
+    dMB = L[:, -1] - V - Bm
+    dMBx = L[:, -1, None] * x[:, -1] - V[:, None] * yB - Bm[:, None] * xB
+    dxB = (dMBx - xB * dMB[:, None]) / MB[:, None]
+
+    return xp.concatenate([dMD[:, None], dxD, dM, dx.reshape(m, nt * ns), dMB[:, None], dxB],
+                          axis=1)
+
+
 def initial_state(
     cp: ColumnParameters,
     xD: np.ndarray,
@@ -232,6 +308,7 @@ def steady_state(
     guess: np.ndarray | None = None,
     t_settle: float = 4_000.0,
     warm: bool = False,
+    max_evaluations: int | None = None,
 ) -> np.ndarray:
     """Solve the column for the steady state at the given feed and internal flows.
 
@@ -239,6 +316,10 @@ def steady_state(
     initial profile, so the column is first integrated to rest and the result then
     polished with a Newton step.  Integration is the reliable half; the polish is
     what drives the residual to solver tolerance.
+
+    An integration that has not reached `t_settle` within `max_evaluations` evaluations
+    of the right-hand side (`MAX_SETTLE_EVALUATIONS` by default) raises
+    `SettleLimitExceeded`.
     """
     from scipy.integrate import solve_ivp
     from scipy.optimize import fsolve
@@ -266,15 +347,44 @@ def steady_state(
 
     # A warm start from a nearby steady state is close enough for Newton on its own,
     # which matters because this solve sits inside the plantwide design loop and the
-    # integration below costs seconds rather than milliseconds.
+    # integration below costs seconds rather than milliseconds.  No steady-state balance
+    # involves the drum or base holdup, so Newton can move either to any value, a negative
+    # one included, at no cost in the residual; such a root is rejected.
     if warm and guess is not None:
         sol, _, ier, _ = fsolve(f, guess, full_output=True, xtol=1e-13)
-        if ier == 1 and np.max(np.abs(f(sol))) < 1e-8:
+        if ier == 1 and np.max(np.abs(f(sol))) < 1e-8 and _holdups_positive(sol, cp):
             return sol
 
+    limit = MAX_SETTLE_EVALUATIONS if max_evaluations is None else max_evaluations
+
     def settle(start):
-        return solve_ivp(lambda t, z: f(z), (0.0, t_settle), start, method="LSODA",
-                         rtol=1e-10, atol=1e-12)
+        count = [0]
+
+        def counted(t, z):
+            count[0] += 1
+            return f(z)
+
+        # A terminal event at the first step that ends past the limit, positive before it
+        # and zero there, as `control._deadline` places a wall-clock stop.
+        stop: list[float] = []
+
+        def exhausted(t, z):
+            if not stop:
+                if count[0] <= limit:
+                    return 1.0
+                stop.append(t)
+            return stop[0] - t
+
+        exhausted.terminal = True
+        exhausted.direction = -1
+        traj = solve_ivp(counted, (0.0, t_settle), start, method="LSODA", rtol=1e-10,
+                         atol=1e-12, events=exhausted)
+        if traj.status == 1:
+            raise SettleLimitExceeded(
+                f"column integration to steady state stopped at t = {stop[0]:.4g} of "
+                f"{t_settle:.4g} min after {count[0]} right-hand-side evaluations, "
+                f"the limit being {limit}")
+        return traj
 
     traj = settle(guess)
     if warm and traj.success and not np.all(np.isfinite(traj.y[:, -1])):
@@ -288,6 +398,13 @@ def steady_state(
 
     sol, _, ier, _ = fsolve(f, traj.y[:, -1], full_output=True, xtol=1e-13)
     polished = np.max(np.abs(f(sol)))
-    if ier != 1 or not np.isfinite(polished) or polished > np.max(np.abs(f(traj.y[:, -1]))):
+    if (ier != 1 or not np.isfinite(polished) or polished > np.max(np.abs(f(traj.y[:, -1])))
+            or not _holdups_positive(sol, cp)):
         sol = traj.y[:, -1]  # keep the integrated result if the polish did not help
     return sol
+
+
+def _holdups_positive(z: np.ndarray, cp: ColumnParameters) -> bool:
+    """Whether every holdup of a column state, drum, trays and base, is positive."""
+    MD, _, M, _, MB, _ = unpack(z, cp)
+    return bool(MD > 0.0 and MB > 0.0 and np.all(M > 0.0))

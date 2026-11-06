@@ -25,7 +25,8 @@ import numpy as np
 from plantbench.backend import namespace
 from plantbench.core import control as ctl
 from plantbench.core.case import Case, Config, override
-from plantbench.core.casekit import cached_design, measured
+from plantbench.core.casekit import cached_design, limits_from, measured
+from plantbench.core.limits import CHOICE, SOURCE
 
 from . import design_starts
 from .model import SCHEMES, Design, Plant, solve_design
@@ -190,11 +191,24 @@ TUNING = {
 }
 # ERIC-100, the recovery cascade's primary: on the TK-100 temperature set-point, K per
 # unit recovery, or on the expander-to-branch ratio R, per unit recovery.  The recovery's
-# span is the whole of a fraction [choice]; the HYSYS case has no ERIC-100.
+# span is the whole of a fraction [choice].  The tuned HYSYS case has an ERIC-100, at
+# 0.005 %/%, 3 s and -50 to 0 C on the TIC-100 set-point (`hysys_reference.json`,
+# inspection); this tuning was chosen without it, for damping (README, Control structures).
 RECOVERY_ON_TEMPERATURE = dict(Kc=-5.0, tau_I=3.0, lo=-60.0, hi=-20.0, pv_range=(0.0, 1.0))
 # A larger R sends less of the TK-100 vapor to the branch and raises the recovery: at a
 # fixed TK-100 temperature, 0.0064 for R 5 % above its design value, gsp and crr alike.
 RECOVERY_ON_RATIO = dict(Kc=1.0, tau_I=3.0, lo=0.5, hi=4.0, pv_range=(0.0, 1.0))
+
+
+def limits(design: Design) -> dict:
+    """The spans of the measurements the HYSYS case's controllers read, their PV spans
+    [H], and that of the ethane recovery, the whole of a fraction [choice]."""
+    names = measurements(design)
+    spans = {name: {"span": (*tuning["pv_range"], "the HYSYS controller's PV span")}
+             for name, tuning in TUNING.items() if name in names}
+    recovery = {"ethane recovery": {"span": (*RECOVERY_ON_TEMPERATURE["pv_range"],
+                                             "the whole of a fraction")}}
+    return {**limits_from(spans, SOURCE), **limits_from(recovery, CHOICE)}
 
 
 def _loop(m: dict, name: str, mv: str, tuning: dict) -> ctl.Loop:
@@ -289,4 +303,5 @@ CASE = Case(
     disturbances=DISTURBANCES,
     measurements=measurements,
     state_names=lambda design: design.plant.state_names(),
+    limits=limits,
 )

@@ -44,7 +44,8 @@ from scipy.stats import qmc
 # How many path components below each section name a single entry.  None: the rest of
 # the path is one key (parameter overrides are themselves dotted paths).
 _DEPTH = {"structure": 0, "options": 1, "setpoints": 1, "setpoint_steps": 1, "params": None,
-          "tuning": 2, "instruments": 2, "actuators": 2, "disturbance": 1}
+          "tuning": 2, "instruments": 2, "actuators": 2, "disturbance": 1, "mismatch": None,
+          "x0": 1, "hold": 1, "noise": 2}
 
 RUN_DEFAULTS = {"t_end": 1500.0, "dt": 1.0, "wall_budget": None, "features": [],
                 "states": True}

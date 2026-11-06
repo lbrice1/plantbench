@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from plantbench.backend import namespace
+
 from .parameters import R_GAS, ColumnParameters, ThermoParameters
 
 
@@ -56,10 +58,12 @@ def normal_boiling_points(tp: ThermoParameters, cp: ColumnParameters) -> np.ndar
 
 
 def bubble_point(x, P: float, tp: ThermoParameters, cp: ColumnParameters):
-    """Bubble temperature of liquid x at pressure P (bar).  x may be a stack of rows."""
-    x = np.asarray(x, dtype=float)
-    s = x @ np.asarray(cp.alpha, dtype=float)
-    return _lam_over_R(cp) / (a_product(tp, cp) - np.log(P / s))
+    """Bubble temperature of liquid x at pressure P (bar).  x may be a stack of rows, on
+    NumPy or CuPy."""
+    xp = namespace(x)
+    x = xp.asarray(x, dtype=float)
+    s = x @ xp.asarray(cp.alpha, dtype=float)
+    return _lam_over_R(cp) / (a_product(tp, cp) - xp.log(P / s))
 
 
 def dew_point(y, P: float, tp: ThermoParameters, cp: ColumnParameters):

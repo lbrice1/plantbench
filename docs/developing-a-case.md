@@ -107,6 +107,8 @@ An id is refused if it breaks the naming convention, names a built-in case, or i
 | `StateLayout` | the state vector as named blocks, a holdup or a composition array: `pack`, `unpack`, `names()` for `state_names`, `index` |
 | `state_measurement` | a measurement reading one state, by index or by its name in a layout |
 | `cached_design` | caches a slow design solve per worker process, as `jacketed_cstr` does |
+| `parameter_mismatch` | the `apply_mismatch` of a design dataclass whose model reads the parameters it is passed |
+| `limits_from` | a case's `limits` from a table of plain data, spans and limits per measurement on one basis, `source` or `choice` |
 | `fixed_point_residual` | the largest `rhs` at the design point and the states where it is largest, for a design that is not yet a steady state |
 
 ```python
@@ -121,11 +123,11 @@ m_base_level = state_measurement("M_B", LAYOUT)
 
 A design may declare `batched = True` (a class attribute) when its `rhs` and the case's measures accept a batch of m states, `x` of shape (m, n), with inputs whose fields carry the same leading axis (`control.batch_inputs`), and return (m, n) derivatives and (m,) measurements. `jacobian="batched"` then evaluates the closed loop's Jacobian as one batch, on the host or on a GPU (User guide, The batched Jacobian and GPUs). It is optional, and a case that does not declare it runs as before.
 
-The usual way to write one function for one state and for a batch is to index the last axis, `x[..., k]` and `u.z_feed[..., k]`, and to end a measure in `casekit.measured(...)` rather than `float(...)`. `StateLayout.unpack` and `pack` take a batch. A case on the GPU takes its array module from its states (`backend.namespace(x)`) rather than calling NumPy, and `PengRobinson.on(device)` gives the equation of state on the device. The contract check `a_declared_batch_evaluates_as_its_rows` compares a batch with single evaluations.
+The usual way to write one function for one state and for a batch is to index the last axis, `x[..., k]` and `u.z_feed[..., k]`, and to end a measure in `casekit.measured(...)` rather than `float(...)`. `StateLayout.unpack` and `pack` take a batch. A case on the GPU takes its array module from its states (`backend.namespace(x)`) rather than calling NumPy, and `PengRobinson.on(device)` gives the equation of state on the device. The contract check `a_declared_batch_evaluates_as_its_rows` compares a batch with single evaluations. An iterative solve inside a batched right-hand side holds each row where it converges while the others continue, as the bubble point and the flashes of `PengRobinson` do, so that a member's derivatives do not depend on the other members of its batch. A row iterated until the slowest row converges moves by an amount below the tolerance; an ensemble member then depends on its ensemble.
 
 ## Testing
 
-The contract is shipped with the library as `plantbench.contract.CHECKS`, the same checks the library runs on its own cases: the id, a fixed point under every structure, the reference structure, state names, finite measurements, the configuration round trip, ideal instruments, a short run at rest and the generic disturbances. The generated `tests/test_contract.py` runs them under pytest:
+The contract is shipped with the library as `plantbench.contract.CHECKS`, the same checks the library runs on its own cases: the id, a fixed point under every structure, the reference structure, state names, finite measurements, limits that hold at the design point, the configuration round trip, ideal instruments, a short run at rest and the generic disturbances. The generated `tests/test_contract.py` runs them under pytest:
 
 ```python
 @pytest.mark.parametrize("check", contract.CHECKS, ids=lambda c: c.__name__)

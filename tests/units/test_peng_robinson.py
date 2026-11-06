@@ -9,6 +9,8 @@ import pytest
 
 pytest.importorskip("thermo")
 
+from _pole import POLE_K, POLE_K0, POLE_Z  # noqa: E402
+
 from plantbench.units import peng_robinson as prm  # noqa: E402
 from plantbench.units.peng_robinson import Components, PengRobinson  # noqa: E402
 
@@ -129,9 +131,9 @@ def test_a_row_newton_does_not_settle_is_finished_by_substitution(pr, monkeypatc
 
 def test_newton_holds_a_diverged_row_and_leaves_the_others(pr, monkeypatch):
     """A row driven out of the bound on ln K is held and reported unsettled, and the rows
-    beside it get what they would alone, to round-off: the held row keeps the batch
-    iterating, and they take further steps of the order of round-off.  The divergence is made by shifting the
-    substitution of one row, marked by its temperature, by 1000 in ln K."""
+    beside it get what they would alone, to the last bit: each stops at its own
+    convergence.  The divergence is made by shifting the substitution of one row, marked
+    by its temperature, by 1000 in ln K."""
     T, P, z, f = _two_phase_feed(pr)
     lnK = np.log(f.K[(f.V > 0.0) & (f.V < 1.0)]) * (1.0 + 1e-4)
     beta = np.full(len(T), 0.5)
@@ -148,8 +150,65 @@ def test_newton_holds_a_diverged_row_and_leaves_the_others(pr, monkeypatch):
     assert alone[2].all()
     assert not out[2][-1]
     assert np.array_equal(out[0][-1], lnK[0])
-    assert np.allclose(out[0][:-1], alone[0], rtol=0, atol=1e-12)
+    assert np.array_equal(out[0][:-1], alone[0])
+    assert np.array_equal(out[1][:-1], alone[1])
     assert np.array_equal(out[2][:-1], alone[2])
+
+
+def _rows_of(result):
+    if isinstance(result, prm.Flash):
+        return dict(vars(result))
+    return dict(enumerate(result))
+
+
+def _assert_rows_independent(f, args, harder):
+    """f(*args) against f of each row alone, of the rows reversed, and of the rows followed
+    by `harder`, rows of the same shape that take more iterations: equal to the last bit."""
+    n = len(args[0])
+    whole = _rows_of(f(*args))
+    alone = [_rows_of(f(*(a[i:i + 1] for a in args))) for i in range(n)]
+    rev = _rows_of(f(*(a[::-1] for a in args)))
+    beside = _rows_of(f(*(np.concatenate([a, h]) for a, h in zip(args, harder))))
+    for k, v in whole.items():
+        np.testing.assert_array_equal(np.concatenate([r[k] for r in alone]), v, err_msg=k)
+        np.testing.assert_array_equal(rev[k][::-1], v, err_msg=k)
+        np.testing.assert_array_equal(beside[k][:n], v, err_msg=k)
+
+
+def test_a_row_of_a_bubble_point_or_flash_does_not_depend_on_its_batch(pr):
+    """Each row is held where it converges while the others continue, so that a row gets
+    alone, in another order and beside rows that take longer what it gets in its batch, to
+    the last bit.  The rows that take longer start the bubble point 10 K above, the PT
+    flash from K within 1e-6 of 1, where the tangent-plane test is needed, and the PH and
+    PS flashes 60 K below.  Each converges: sum K x = 1, the phases balance the feed, and
+    the PH and PS flashes reach their enthalpy and entropy."""
+    x = np.array([_x(name) for name in COMPOSITIONS for _ in range(3)])
+    P = np.tile([1000e3, 2000e3, 3000e3], len(COMPOSITIONS))
+    T_b, y_b = pr.bubble_T(P, x)
+    _assert_rows_independent(lambda P, x, T0: pr.bubble_T(P, x, T0=T0),
+                             (P, x, T_b + 3.0), (P, x, T_b + 10.0))
+    assert np.allclose((pr.K(T_b, P, x, y_b) * x).sum(axis=1), 1.0, rtol=0, atol=1e-12)
+
+    rng = np.random.default_rng(3)
+    n = 30
+    z = rng.dirichlet(np.full(len(NAMES), 0.7), n)
+    T = rng.uniform(140.0, 330.0, n)
+    P = rng.uniform(3e5, 7.5e6, n)
+    K_wilson = pr.wilson_K(T, P)
+    near_one = np.tile(np.exp(1e-6 * np.where(np.arange(len(NAMES)) < 2, 1.0, -1.0)), (n, 1))
+    _assert_rows_independent(lambda T, P, z, K0: pr.flash_PT(T, P, z, K0=K0),
+                             (T, P, z, K_wilson), (T, P, z, near_one))
+    f = pr.flash_PT(T, P, z, K0=K_wilson)
+    np.testing.assert_allclose((1 - f.V)[:, None] * f.x + f.V[:, None] * f.y, z,
+                               rtol=0, atol=1e-12)
+
+    for name, target in (("PH", f.h), ("PS", f.s)):
+        flash = getattr(pr, "flash_" + name)
+        _assert_rows_independent(lambda P, v, z, T0: flash(P, v, z, T0=T0),
+                                 (P, target, z, T + 5.0), (P, target, z, T - 60.0))
+        g = flash(P, target, z, T0=T + 5.0)
+        np.testing.assert_allclose(getattr(g, name[1].lower()), target, rtol=1e-9)
+        np.testing.assert_allclose(g.T, T, rtol=1e-10)
 
 
 @pytest.mark.parametrize("solve", [prm._eigen_real_roots, prm._cubic_real_roots])
@@ -287,3 +346,18 @@ def test_rachford_rice_ignores_absent_components_and_the_batch(pr):
     np.testing.assert_allclose(r, 0.0, atol=1e-12)
     f = pr.flash_PT(np.array([297.52, 197.34]), np.array([3243388.70, 4622565.31]), z)
     assert np.all(np.isfinite(f.V))
+
+
+
+def test_rachford_rice_stops_beside_a_pole(pr):
+    """Started from 1.0037211635987813, the row took a Newton step onto the pole itself,
+    where the sum is infinite, and came back NaN; the flash did too.  The row now stops
+    short of the pole, and the flash finds the stream all vapor."""
+    z, K = np.array([POLE_Z]), np.array([POLE_K])
+    beta = prm._rachford_rice(z, K, np.array([1.0037211635987813]))
+    pole = 1.0 / (1.0 - K.min())
+    assert np.isfinite(beta[0]) and 1.0 < beta[0] < pole
+    f = pr.flash_PT(np.array([255.23591130361294]), np.array([820671.9196923358]), z,
+                    K0=np.array([POLE_K0]))
+    assert f.V[0] == 1.0
+    np.testing.assert_array_equal(f.y, z)

@@ -27,6 +27,7 @@ import numpy as np
 from . import control as ctl
 from . import disturbances as dist
 from .instruments import Actuator, Instrument
+from .limits import Limits
 
 Measurement = Callable[[np.ndarray, Any, Any], float]
 # A feature is computed from the configured plant at its design point, not from the run, so
@@ -52,9 +53,21 @@ class Config:
     instruments      loop name -> keyword arguments of `Instrument`
     actuators        loop name -> keyword arguments of `Actuator`
     disturbance      {"name": ..., **arguments}, or a list of them; empty for none
+    mismatch         overrides of the plant's parameters by dotted path, applied after the
+                     design is solved and the structure biased from it: the plant departs
+                     from the design while the start, the biases and the set-points stay
+    x0               state name -> value at the start of the run, the other states at the
+                     design; instruments and filters start at rest at that state
+    hold             input name -> a constant value for the whole run; the loops that write
+                     the input are removed, and any cascade primary of a removed loop
+    noise            {"seed": int, "std": {measurement name: standard deviation}}: white
+                     noise on the named measurements at each sample of a stepped run
+                     (`core.stepper`), from a generator of its own; refused by `run`
 
     Every section is empty by default, and a configuration with only a structure named
-    is the case's reference plant.
+    is the case's reference plant.  `params` moves the design with the parameters, and
+    with it the regulatory layer; `mismatch` leaves both as designed, which is model-plant
+    mismatch.  A case supports `mismatch` when it declares `Case.apply_mismatch`.
     """
 
     structure: str
@@ -66,9 +79,19 @@ class Config:
     instruments: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     actuators: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     disturbance: Mapping[str, Any] | list = field(default_factory=dict)
+    mismatch: Mapping[str, float] = field(default_factory=dict)
+    x0: Mapping[str, float] = field(default_factory=dict)
+    hold: Mapping[str, float] = field(default_factory=dict)
+    noise: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
-        return _plain(dataclasses.asdict(self))
+        d = _plain(dataclasses.asdict(self))
+        # Sections added after 0.3.0 are written only when used, so that a configuration
+        # without them keeps the key, and with it the run id, it had before.
+        for name in _LATER_SECTIONS:
+            if not d[name]:
+                del d[name]
+        return d
 
     @classmethod
     def from_dict(cls, d: Mapping[str, Any]) -> Config:
@@ -85,6 +108,9 @@ class Config:
         """A stable hash of the configuration, the same across processes and sessions."""
         text = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"))
         return hashlib.sha1(text.encode()).hexdigest()[:16]
+
+
+_LATER_SECTIONS = ("mismatch", "x0", "hold", "noise")
 
 
 def _plain(v):
@@ -130,6 +156,11 @@ def _override_one(obj, parts: list[str], value, path: str):
 # ------------------------------------------------------------------------------------
 
 
+def _no_limits(design) -> dict:
+    """The limits of a case that declares none."""
+    return {}
+
+
 @dataclass(frozen=True)
 class Case:
     """What a test problem supplies to the library.
@@ -148,6 +179,13 @@ class Case:
     features               name -> f(setup) -> {name: value}, case-specific quantities a
                            dataset may record alongside each run; the generic features of
                            `GENERIC_FEATURES` are available to every case
+    apply_mismatch         (design, overrides) -> the plant of the design with its
+                           parameters overridden and its state and inputs kept, for the
+                           `mismatch` section (`casekit.parameter_mismatch`); None, the
+                           default, when the case does not support one
+    limits                 design -> {measurement: Limits}, the spans, alarm and trip
+                           limits and open-loop steady states of the measurements the
+                           case bounds (`core.limits`); none by default
     """
 
     id: str
@@ -162,6 +200,8 @@ class Case:
     measurements: Callable[[Any], Mapping[str, Measurement]]
     state_names: Callable[[Any], list[str]]
     features: Mapping[str, Feature] = field(default_factory=dict)
+    apply_mismatch: Callable[[Any, Mapping[str, float]], Any] | None = None
+    limits: Callable[[Any], Mapping[str, Limits]] = _no_limits
 
     def config(self, structure: str | None = None, **sections) -> Config:
         """A configuration of this case, with its options defaulted and checked."""
@@ -179,6 +219,9 @@ class Case:
         if unknown:
             raise KeyError(f"case {self.id} has no options {sorted(unknown)}; "
                            f"options: {sorted(self.options)}")
+        if config.mismatch and self.apply_mismatch is None:
+            raise ValueError(f"case {self.id} does not support a mismatch section; use "
+                             "params, which moves the design with the parameters")
         options = {**self.options, **config.options}
         return replace(config, options=options)
 
@@ -191,16 +234,36 @@ GENERIC_DISTURBANCES: dict[str, Callable[..., dist.Disturbance]] = {
 
 @dataclass
 class Setup:
-    """A configured plant at its design point, ready to simulate."""
+    """A configured plant at its design point, ready to simulate.
+
+    When a `mismatch` changes the plant's parameters or a `hold` moves an input from its
+    design value, `design` is the plant so changed, at the state of `nominal`, the design
+    the structure was biased from; otherwise `nominal` is None.  `x0` is the plant state
+    the run starts from, the design's unless the configuration has an `x0` section, and
+    `held` the elements a `hold` removed from the structure."""
 
     case: Case
     config: Config
     design: Any
     structure: ctl.Structure
     disturbance: dist.Disturbance | None
+    nominal: Any = None
+    x0: np.ndarray | None = None
+    held: ctl.Structure = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.x0 is None:
+            self.x0 = self.design.x
 
     def spectrum(self) -> np.ndarray:
-        """Closed-loop eigenvalues at the design point, structural zeros removed."""
+        """Closed-loop eigenvalues at the design point, structural zeros removed.
+
+        Raises when a `mismatch` or a `hold` has moved the plant from its design, whose
+        state is then not a steady state of the plant.  An `x0` changes only the start."""
+        if self.nominal is not None:
+            raise ValueError("under a mismatch, or an input held away from its design "
+                             "value, the design point is not a steady state of the plant, "
+                             "so it has no closed-loop spectrum")
         return ctl.closed_loop_spectrum(self.design, self.structure)
 
 
@@ -228,8 +291,9 @@ def build(case: Case, config: Config | Mapping) -> Setup:
 
 
 def build_on(case: Case, design, config: Config) -> Setup:
-    """`build` on a design already made, for a validated configuration: the structure and
-    the disturbance, which are all that the members of an ensemble do not share."""
+    """`build` on a design already made, for a validated configuration: the structure, the
+    disturbance, any mismatch, held inputs and start, which are all that the members of an
+    ensemble do not share."""
     structure = case.make_structure(design, config)
     structure = ctl.with_tuning(structure, config.tuning)
     structure = ctl.with_setpoints(structure, config.setpoints)
@@ -239,14 +303,135 @@ def build_on(case: Case, design, config: Config) -> Setup:
         instruments={k: Instrument(**v) for k, v in config.instruments.items()},
         actuators={k: Actuator(**v) for k, v in config.actuators.items()},
     )
-    return Setup(case, config, design, structure, _disturbance(case, design, config))
+    structure, held = _hold(design, structure, config)
+    disturbance = _disturbance(case, design, config)
+    plant = design
+    if config.mismatch:
+        plant = case.apply_mismatch(design, config.mismatch)
+        _check_mismatch_acts(case, design, plant, structure, config.mismatch)
+    moved = {k: float(v) for k, v in config.hold.items() if float(v) != getattr(design.u, k)}
+    if moved:
+        if not dataclasses.is_dataclass(plant):
+            raise TypeError(f"{type(plant).__name__} is not a dataclass, so its inputs "
+                            "cannot be held at other values")
+        plant = replace(plant, u=replace(plant.u, **moved))
+    _check_undisturbed(disturbance, plant.u, config.hold, "held")
+    _check_noise(case, design, config.noise)
+    return Setup(case, config, plant, structure, disturbance,
+                 nominal=None if plant is design else design,
+                 x0=_start(case, design, config.x0), held=held)
+
+
+def _hold(design, structure: ctl.Structure, config: Config):
+    """The structure without the elements that write a held input, and those elements.
+    Raises on an input the design does not have or that is not a scalar, and on another
+    section of the configuration that names a removed loop."""
+    _check_inputs(design.u, config.hold, "hold", "held")
+    structure, held = ctl.without_inputs(structure, config.hold)
+    names = {e.name for e in held}
+    for section in ("setpoints", "setpoint_steps", "tuning", "instruments", "actuators"):
+        clash = sorted(names & set(getattr(config, section)))
+        if clash:
+            raise ValueError(f"{section} names {clash}, which hold "
+                             f"{sorted(config.hold)} removes from the structure")
+    return structure, held
+
+
+def _check_inputs(u, names, verb: str, participle: str) -> None:
+    """Raise unless every name is a scalar field of the inputs `u`: what a configuration's
+    `hold` and a stepper's owned inputs may name."""
+    for name in names:
+        if not hasattr(u, name):
+            raise KeyError(f"cannot {verb} {name!r}: the inputs are "
+                           f"{[f.name for f in dataclasses.fields(u)]}")
+        if np.ndim(getattr(u, name)) != 0:
+            raise TypeError(f"cannot {verb} {name!r}: only a scalar input can be {participle}")
+
+
+def _check_undisturbed(disturbance, u0, names, participle: str) -> None:
+    """Raise if the disturbance changes one of the named inputs, at the start or at any of
+    the times it declares (`control.breakpoints_of`): the input would have two owners."""
+    if disturbance is None or not names:
+        return
+    for t in (0.0, *getattr(disturbance, "times", ())):
+        u = disturbance(t, u0)
+        changed = sorted(k for k in names if getattr(u, k) != getattr(u0, k))
+        if changed:
+            raise ValueError(f"the disturbance changes the {participle} input(s) {changed} "
+                             f"at t = {t:g}")
+
+
+def _check_noise(case: Case, design, noise: Mapping[str, Any]) -> None:
+    """Raise unless `noise` is empty or holds an integer seed and non-negative standard
+    deviations of measurements the case has."""
+    if not noise:
+        return
+    unknown = sorted(set(noise) - {"seed", "std"})
+    if unknown or "std" not in noise:
+        raise KeyError(f"noise is {{'seed': ..., 'std': {{measurement: sigma}}}}, not "
+                       f"{sorted(noise)}")
+    seed = noise.get("seed", 0)
+    if isinstance(seed, bool) or not isinstance(seed, int):
+        raise TypeError(f"the noise seed must be an integer, not {seed!r}")
+    names = set(case.measurements(design))
+    missing = sorted(set(noise["std"]) - names)
+    if missing:
+        raise KeyError(f"no measurements {missing} in case {case.id}; measurements: "
+                       f"{sorted(names)}")
+    negative = sorted(k for k, v in noise["std"].items() if not float(v) >= 0.0)
+    if negative:
+        raise ValueError(f"the noise of {negative} must be a non-negative standard deviation")
+
+
+def check_continuous(config: Config) -> None:
+    """Raise for what a continuous run cannot do: a configuration with measurement noise,
+    which only a stepped run draws."""
+    if config.noise:
+        raise ValueError("measurement noise is drawn at the samples of a stepped run "
+                         "(`plantbench.Stepper`); a continuous run has no samples to draw it at")
+
+
+def _start(case: Case, design, x0: Mapping[str, float]) -> np.ndarray:
+    """The plant state a run starts from: the design's, with the states `x0` names set."""
+    x = np.array(design.x, dtype=float)
+    if not x0:
+        return x
+    names = list(case.state_names(design))
+    unknown = sorted(set(x0) - set(names))
+    if unknown:
+        raise KeyError(f"no states {unknown} in case {case.id}; states are named as "
+                       "`case.state_names(design)` names them")
+    for name, value in x0.items():
+        x[names.index(name)] = float(value)
+    return x
+
+
+def _check_mismatch_acts(case: Case, design, plant, structure: ctl.Structure,
+                         overrides: Mapping[str, float]) -> None:
+    """Raise if the overrides change neither the closed-loop right-hand side nor a
+    measurement at the design point.  A parameter that the design solve turns into an
+    input, a feed condition, is such a case: the inputs stay at the design, so overriding
+    it would leave the plant as designed without saying so."""
+    y = np.concatenate([design.x, ctl.initial_augmented(structure, design)])
+    before = ctl.closed_loop_rhs(0.0, y, structure, design.u, design.pp, None, design.rhs)
+    after = ctl.closed_loop_rhs(0.0, y, structure, plant.u, plant.pp, None, plant.rhs)
+    if not np.array_equal(before, after):
+        return
+    designed, perturbed = case.measurements(design), case.measurements(plant)
+    if any(designed[k](design.x, design.u, design.pp) != perturbed[k](plant.x, plant.u, plant.pp)
+           for k in designed):
+        return
+    raise ValueError(f"mismatch {sorted(overrides)} changes neither the plant's right-hand "
+                     "side nor a measurement at the design point; a parameter the design "
+                     "turns into an input is changed through the disturbance instead")
 
 
 def design_key(config: Config) -> str:
     """What decides a configuration's design: configurations with the same key can be
     built on one design and run as one ensemble.  A case's `make_design` reads the
     parameters and the options; the structure is included as well, since the structures
-    of an ensemble must have the same elements."""
+    of an ensemble must have the same elements.  A `mismatch` is applied to the plant
+    after the design is made and is not part of it."""
     return json.dumps({"structure": config.structure, "options": dict(config.options),
                        "params": dict(config.params)}, sort_keys=True, default=str)
 
@@ -262,11 +447,48 @@ def _disturbance(case: Case, design, config: Config) -> dist.Disturbance | None:
     for spec in specs:
         spec = dict(spec)
         name = spec.pop("name", None)
+        if name in SEQUENCES and name not in case.disturbances:
+            parts.append(_sequence(case, available, design, config, name, spec))
+            continue
         if name not in available:
             raise KeyError(f"case {case.id} has no disturbance {name!r}; "
-                           f"available: {sorted(available)}")
+                           f"available: {sorted([*available, *SEQUENCES])}")
         parts.append(available[name](design, config, **spec))
     return parts[0] if len(parts) == 1 else dist.combine(*parts)
+
+
+# A sequence of any other disturbance: `of` names it, `level` the argument that takes each
+# level, and the remaining arguments are passed to every part with its own time `t`.
+SEQUENCES = {"sequence": ("times", "levels"),
+             "random_sequence": ("seed", "low", "high", "dwell", "start", "end", "kind")}
+
+
+def _sequence(case: Case, available, design, config: Config, name: str,
+              spec: dict) -> dist.Disturbance:
+    """`{"name": "sequence", "of": ..., "level": ..., "times": [...], "levels": [...]}`, or
+    `"random_sequence"` with the arguments of `disturbances.random_levels` in place of
+    the times and the levels: the disturbance `of` at each level from its time on, each
+    level relative to the nominal inputs (`disturbances.sequence`)."""
+    of, level = spec.pop("of", "step"), spec.pop("level", "fraction")
+    if of not in available:
+        raise KeyError(f"case {case.id} has no disturbance {of!r} to make a sequence of; "
+                       f"available: {sorted(available)}")
+    own = {k: spec.pop(k) for k in SEQUENCES[name] if k in spec}
+    if "t" in spec or level in spec:
+        raise ValueError(f"a {name} gives each part its time and its {level!r}")
+    if name == "sequence":
+        missing = {"times", "levels"} - set(own)
+        if missing:
+            raise KeyError(f"a sequence needs {sorted(missing)}")
+        times, levels = own["times"], own["levels"]
+        if len(levels) != len(times):
+            raise ValueError("a sequence needs one level per time")
+    else:
+        times, levels = dist.random_levels(**own)
+    d = dist.sequence([available[of](design, config, **spec, t=float(t), **{level: float(v)})
+                       for t, v in zip(times, levels)], times)
+    d.levels = tuple(float(v) for v in levels)
+    return d
 
 
 # ------------------------------------------------------------------------------------
@@ -351,6 +573,7 @@ def run(case: Case, config: Config | Mapping, t_end: float, n_points: int | None
     `control.integrate`.
     """
     setup = build(case, config)
+    check_continuous(setup.config)
     if n_points is None:
         n_points = 1200 if dt is None else int(round(t_end / dt)) + 1
     measurements = case.measurements(setup.design)
@@ -358,7 +581,7 @@ def run(case: Case, config: Config | Mapping, t_end: float, n_points: int | None
     r = ctl.integrate(setup.design, setup.structure, t_end, setup.disturbance, n_points,
                       rtol, atol, measurements=measurements, wall_budget=wall_budget,
                       breakpoints=ctl.breakpoints_of(setup.disturbance, setup.structure),
-                      jacobian=jacobian, device=device)
+                      jacobian=jacobian, device=device, x0=setup.x0)
     return Trajectory(case=case.id, config=setup.config.to_dict(), t=r.t, x=r.X,
                       state_names=list(case.state_names(setup.design)), u=r.U, y=r.Y,
                       wall_time=time.perf_counter() - start, nfev=r.nfev, c=r.C)
@@ -389,6 +612,8 @@ def run_setups(setups: list[Setup], t_end: float, n_points: int | None = None,
     the tolerance, not to the last bit.  `wall_budget` applies to each ensemble."""
     from .ensemble import integrate_ensemble
 
+    for s in setups:
+        check_continuous(s.config)
     if n_points is None:
         n_points = 1200 if dt is None else int(round(t_end / dt)) + 1
     groups: dict[tuple, list[int]] = {}
@@ -402,7 +627,8 @@ def run_setups(setups: list[Setup], t_end: float, n_points: int | None = None,
             design = setups[chunk[0]].design
             r = integrate_ensemble(design, [setups[k].structure for k in chunk],
                                    [setups[k].disturbance for k in chunk], t_end, n_points,
-                                   rtol, atol, wall_budget=wall_budget, device=device)
+                                   rtol, atol, wall_budget=wall_budget, device=device,
+                                   starts=[setups[k].x0 for k in chunk])
             n = len(design.x)
             share = r.wall_time / len(chunk)
             for j, k in enumerate(chunk):
@@ -438,6 +664,7 @@ def run_ensemble(case: Case, configs: list, t_end: float, size: int | None = Non
     for k, config in enumerate(configs):
         try:
             config = case.validate(config)
+            check_continuous(config)
             key = design_key(config)
             if key not in designs:
                 designs[key] = case.make_design(config)

@@ -12,8 +12,9 @@ from __future__ import annotations
 
 from plantbench.core import control as ctl
 from plantbench.core.case import Case, Config, override
-from plantbench.core.casekit import state_measurement
+from plantbench.core.casekit import limits_from, parameter_mismatch, state_measurement
 from plantbench.core.control import Loop
+from plantbench.core.limits import CHOICE
 
 from .model import LAYOUT, Design, TankParameters, solve_design
 
@@ -44,6 +45,17 @@ def make_structure(design: Design, config: Config) -> ctl.Structure:
     return ctl.bias_from_design(STRUCTURES[config.structure](), design)
 
 
+def limits(design: Design) -> dict:
+    # The span, alarm and trip limits of the measurements that have them, each [source]
+    # if the case's reference gives it and [choice] otherwise, with the reason.  The tank
+    # has no reference, so the level spans twice its design value and alarms outside
+    # 5 % to 95 % of that.
+    full = 2.0 * design.pp.h_design
+    return limits_from({"level": {"span": (0.0, full, "twice the design level"),
+                                  "alarm_lo": (0.05 * full, "5 % of span"),
+                                  "alarm_hi": (0.95 * full, "95 % of span")}}, CHOICE)
+
+
 CASE = Case(
     id="template",
     title="Gravity-drained tank (template)",
@@ -58,4 +70,8 @@ CASE = Case(
     disturbances={},
     measurements=lambda design: {"level": m_level, "outflow": m_outflow},
     state_names=lambda design: LAYOUT.names(),
+    # The right-hand side reads the parameters it is passed, so a `mismatch` section can
+    # override them on the design; drop this if the model holds parameters of its own.
+    apply_mismatch=parameter_mismatch,
+    limits=limits,
 )

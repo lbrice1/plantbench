@@ -26,7 +26,7 @@ The integration agrees with LSODA's to the tolerance, not to the last bit.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 from scipy.linalg import lu_factor, lu_solve
@@ -85,7 +85,9 @@ class EnsembleRun:
     `Y` is (members, n_points, n + n_aug), the plant and augmented states on the common
     grid `t`, NaN from where a member stopped.  `status` is "ok", "failed" or "timeout"
     per member, with a `message` for the last two.  The counts are per member: accepted
-    and rejected steps, Jacobians, and rows evaluated (`nfev`, n + 1 per Jacobian)."""
+    and rejected steps, Jacobians, and rows evaluated (`nfev`, n + 1 per Jacobian).
+    `at_breaks` holds, per member, its state at each of its breakpoints inside the run,
+    where its steps end."""
 
     t: np.ndarray
     Y: np.ndarray
@@ -96,6 +98,7 @@ class EnsembleRun:
     jacobians: np.ndarray
     nfev: np.ndarray
     wall_time: float
+    at_breaks: list = field(default_factory=list)
 
 
 def _factor(W, xp):
@@ -111,9 +114,13 @@ def _factor(W, xp):
 def integrate_ensemble(design, structures: list, disturbances: list, t_end: float,
                        n_points: int = 1200, rtol: float = 1e-8, atol: float = 1e-10,
                        wall_budget: float | None = None, device: str = "cpu",
-                       max_steps: int = 100_000) -> EnsembleRun:
+                       max_steps: int = 100_000, starts: list | None = None,
+                       t0: float = 0.0, y0: list | None = None) -> EnsembleRun:
     """Integrate the closed loops of `structures`, member i under `disturbances[i]`, from
-    the design point to `t_end`, all on the grid of `n_points` from 0 to `t_end`.
+    the design point, or from the plant state `starts[i]` where it is given, to `t_end`,
+    all on the grid of `n_points` from 0 to `t_end`.  Given `y0`, member i starts instead
+    from the full state `y0[i]`, plant and augmented, at time `t0`, and the grid runs from
+    `t0`: what the ensemble stepper needs to continue from where its members are.
 
     The design must declare a batched right-hand side that does not depend on t.  Every
     step of a member ends on its breakpoints (`control.breakpoints_of`) and on the output
@@ -133,12 +140,21 @@ def integrate_ensemble(design, structures: list, disturbances: list, t_end: floa
         raise ValueError("one disturbance (or None) is needed per structure")
     stacked = ctl.stack(structures, xp)
     model, pp, u0 = design.rhs, design.pp, design.u
-    Y0 = np.array([np.concatenate([design.x, ctl.initial_augmented(S, design)])
-                   for S in structures])
+    if starts is not None and len(starts) != M:
+        raise ValueError("one start (or None) is needed per structure")
+    starts = [design.x if x is None else np.asarray(x, dtype=float)
+              for x in (starts or [None] * M)]
+    if y0 is None:
+        Y0 = np.array([np.concatenate([x, ctl.initial_augmented(S, design, x)])
+                       for S, x in zip(structures, starts)])
+    else:
+        if len(y0) != M:
+            raise ValueError("one full start is needed per structure")
+        Y0 = np.array([np.asarray(y, dtype=float) for y in y0])
     N = Y0.shape[1]
-    grid = np.linspace(0.0, t_end, n_points)
-    # Where each member's steps must end: its breakpoints and the grid after 0.
-    stops = [np.union1d(grid[1:], [b for b in ctl.breakpoints_of(d, S) if 0.0 < b < t_end])
+    grid = np.linspace(t0, t_end, n_points)
+    # Where each member's steps must end: its breakpoints and the grid after its start.
+    stops = [np.union1d(grid[1:], [b for b in ctl.breakpoints_of(d, S) if t0 < b < t_end])
              for S, d in zip(structures, disturbances)]
     breaks = [set(ctl.breakpoints_of(d, S)) for S, d in zip(structures, disturbances)]
     slot = {float(v): k for k, v in enumerate(grid)}
@@ -147,8 +163,9 @@ def integrate_ensemble(design, structures: list, disturbances: list, t_end: floa
     J = xp.zeros((M, N, N))
     out = np.full((M, n_points, N), np.nan)
     out[:, 0] = Y0
-    t = np.zeros(M)
+    t = np.full(M, float(t0))
     h = np.full(M, H0)
+    at_breaks: list[dict[float, np.ndarray]] = [{} for _ in range(M)]
     nxt = np.zeros(M, dtype=int)
     stale = np.ones(M, dtype=bool)
     status = ["running"] * M
@@ -253,6 +270,7 @@ def integrate_ensemble(design, structures: list, disturbances: list, t_end: floa
                     out[i, g] = done_y[k]
                 if float(t[i]) in breaks[i]:
                     h[i] = min(h[i], H0)
+                    at_breaks[i][float(t[i])] = done_y[k]
                 nxt[i] += 1
                 if nxt[i] == len(stops[i]):
                     status[i], running[i] = "ok", False
@@ -271,7 +289,7 @@ def integrate_ensemble(design, structures: list, disturbances: list, t_end: floa
                 running[i] = False
 
     return EnsembleRun(grid, out, status, message, steps, rejected, jacobians, nfev,
-                       time.perf_counter() - start)
+                       time.perf_counter() - start, at_breaks)
 
 
 def _inputs_move(disturbance, t: float, dt: float, u0) -> bool:

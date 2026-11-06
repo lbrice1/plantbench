@@ -100,6 +100,20 @@ Loop names for set-points, tuning and instruments: `reactor T`, `reactor C_A`, `
 
 `reactor V`, `reactor T`, `reactor C_A`, `drum level`, `base level`, `bottoms x_A`, `tray 17 T` (the bubble point at the plant's column pressure), `recycle`, and `feed T` in the heat-integrated plants.
 
+The limits (`case.limits(design)`, `scenarios.LIMITS`) give the spans in which the loops' signals are expressed in percent, and the alarm and trip limits. The reference gives no transmitter ranges and no limits, so each is a [choice]. The reactor's are those of `jacketed_cstr`, from one table (`plantbench/units/cstr.py`).
+
+| Measurement | Span | Alarm | Trip |
+|---|---|---|---|
+| `reactor T` | 340 to 385 K | below 350 K | above 372 K |
+| `reactor C_A` | 0 to 5 kmol/m³ | | |
+| `reactor V` | 0 to 45.64 m³, twice the design holdup | outside 5 % to 95 % of span | |
+| `drum level` | 0 to 24 kmol, twice the design holdup | outside 5 % to 95 % of span | |
+| `base level` | 0 to 13.8 kmol, twice the design holdup | outside 5 % to 95 % of span | |
+| `tray 17 T` | 360 to 410 K at 0.8 bar, 340 to 390 K at 0.4 bar, 310 to 360 K at 0.15 bar | | |
+| `feed T` | 310 to 360 K | | |
+
+The tray and feed temperatures span 50 K about their design values, the tray's at each column pressure, where it runs at 386.33, 361.20 and 330.75 K. The plantwide reactor's open-loop steady states are not computed, so the limits give none.
+
 ## Reference results
 
 From `studies/reactor_separator_recycle/results/`:
@@ -111,7 +125,7 @@ From `studies/reactor_separator_recycle/results/`:
 
 ## Verification
 
-`tests/units/test_reactor.py` checks the reactor against its published steady state and eigenvalues, and gates everything else. `tests/cases/reactor_separator_recycle/` asserts conservation (column material balance, mole fractions, whole-plant energy balance at three pressures, inert accumulated against inert fed), analytic limits, the pinch bound on every network, and the design point as a fixed point of every structure. `test_golden.py` reproduces the reference results.
+`tests/units/test_reactor.py` checks the reactor against its published steady state and eigenvalues, and gates everything else. `tests/cases/reactor_separator_recycle/` asserts conservation (column material balance, mole fractions, whole-plant energy balance at three pressures, inert accumulated against inert fed), analytic limits, the pinch bound on every network, and the design point as a fixed point of every structure. `test_golden.py` reproduces the reference results. The base plant's right-hand side and measurements take a batch of states, for the batched Jacobian and ensembles, through batched forms of the reactor and column blocks (`rhs_batch`); the scalar forms, with which the reference results are computed, are unchanged. `tests/cases/test_reactor_batch.py` checks a batch against its rows one at a time, the conservation of volume and species in the batched balances, and an ensemble against `run`.
 
 ## References
 
@@ -126,3 +140,4 @@ From `studies/reactor_separator_recycle/results/`:
 - No safety layer, start-up or shutdown, fouling or capital cost.
 - Measurements and valves are ideal unless instruments or actuators are configured.
 - The design solve fails at about half the design boil-ups tried (see Options).
+- The heat-integrated plants have no batched right-hand side, so they run neither with the batched Jacobian nor as ensembles.

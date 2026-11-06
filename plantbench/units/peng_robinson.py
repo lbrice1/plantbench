@@ -211,7 +211,10 @@ class PengRobinson:
         # d a_ij/dT = a_ij / 2 (a_i'/a_i + a_j'/a_j)
         r = da_i / a_i
         da = 0.5 * xp.einsum("ni,nj,nij->n", x, x, a_ij * (r[:, :, None] + r[:, None, :]))
-        b = x @ self.b_i
+        # Not x @ b_i: BLAS forms that for one row by a dot product and for several by a
+        # matrix-vector product, which differ in the last bit, so that a row's result
+        # would depend on the size of its batch.
+        b = xp.einsum("ni,i->n", x, self.b_i)
         return a, da, b, sum_j
 
     # -- the cubic -------------------------------------------------------------------
@@ -247,13 +250,6 @@ class PengRobinson:
         return (xp.concatenate([T, T]), xp.concatenate([P, P]), xp.concatenate([x, y]),
                 xp.arange(2 * n) < n)
 
-    def _stacks(self, T) -> bool:
-        """Whether liquid and vapor are evaluated as one stack.  A single row is not, on
-        the host: BLAS forms x @ b_i for one row by a dot product and for two by a
-        matrix-vector product, which differ in the last bit, and a serial evaluation is
-        to stay as it was."""
-        return len(T) > 1 or self._use_kernels
-
     # -- properties ------------------------------------------------------------------
 
     def ln_phi(self, T, P, x, phase):
@@ -265,8 +261,6 @@ class PengRobinson:
 
     def _ln_phi_pair(self, T, P, x, y):
         """Log fugacity coefficients of liquid x and of vapor y at the same T and P."""
-        if not self._stacks(T):
-            return self.ln_phi(T, P, x, "liquid"), self.ln_phi(T, P, y, "vapor")
         n = len(T)
         ln_phi = self.ln_phi(*self._stack(T, P, x, y))
         return ln_phi[:n], ln_phi[n:]
@@ -340,7 +334,8 @@ class PengRobinson:
         Newton on ln(sum K x) = 0 in T, with the vapor composition updated by successive
         substitution at each step, from a Wilson estimate or from `T0`.  Converges to
         `tol` in ln(sum K x) and in the relative step of T, so that the result is smooth
-        enough to difference.
+        enough to difference.  Each row is held where it converges while the others
+        continue, so that its result does not depend on the other rows of its batch.
         """
         xp = self.xp
         P = xp.asarray(P, dtype=float)
@@ -350,20 +345,24 @@ class PengRobinson:
         y = K * x
         y /= y.sum(axis=1, keepdims=True)
         dT = 1e-4
+        done = xp.zeros(len(T), dtype=bool)
         for _ in range(max_iter):
             K = self.K(T, P, x, y)
             s = (K * x).sum(axis=1)
             f = xp.log(s)
-            y = K * x / s[:, None]
+            y = xp.where(done[:, None], y, K * x / s[:, None])
             Kp = self.K(T + dT, P, x, y)
             fp = xp.log((Kp * x).sum(axis=1))
             step = -f / ((fp - f) / dT)
             step = xp.clip(step, -20.0, 20.0)
-            T = T + step
-            if xp.all(xp.abs(f) < tol) and xp.all(xp.abs(step) < tol * T):
+            new = T + step
+            T = xp.where(done, T, new)
+            done = done | ((xp.abs(f) < tol) & (xp.abs(step) < tol * new))
+            if xp.all(done):
                 break
         else:
-            raise RuntimeError(f"bubble point did not converge: |f| {float(xp.max(xp.abs(f))):.3g}")
+            raise RuntimeError("bubble point did not converge: |f| "
+                               f"{float(xp.max(xp.abs(xp.where(done, 0.0, f)))):.3g}")
         K = self.K(T, P, x, y)
         y = K * x / (K * x).sum(axis=1, keepdims=True)
         if xp.any(xp.max(xp.abs(y - x), axis=1) < 1e-6):
@@ -554,11 +553,15 @@ class PengRobinson:
         was below 1e-6, after which Newton, its Jacobian accurate to about 1e-7, leaves an
         error of order 1e-12, and those ending one phase (a vapor fraction outside (0, 1)), whose
         properties do not depend on K.  A row whose ln K leaves `_LNK_BOUND` has diverged;
-        it is held where it was and not settled."""
+        it is held where it was and not settled.  A row whose step falls below `tol` is
+        held there while the others continue, so that its result does not depend on the
+        other rows of its batch."""
         xp = self.xp
         n, nc = lnK.shape
         eps = 1e-7
         held = xp.zeros(n, dtype=bool)
+        done = xp.zeros(n, dtype=bool)
+        last = xp.full(n, xp.inf)
         for _ in range(max_iter):
             rows = xp.concatenate([lnK[None], lnK[None] + eps * xp.eye(nc)[:, None, :]])
             rows = rows.reshape(-1, nc)  # (nc + 1) blocks of n rows
@@ -570,13 +573,14 @@ class PengRobinson:
             J = xp.transpose((g[1:] - g[0]) / eps, (1, 2, 0))  # (n, nc, nc): dg_i/dlnK_j
             step = xp.linalg.solve(J, -g[0][:, :, None])[:, :, 0]
             new = lnK + step
-            held = held | ~xp.all(xp.abs(new) < _LNK_BOUND, axis=1)  # NaN included
-            lnK = xp.where(held[:, None], lnK, new)
-            beta = bb[:n]
-            if xp.max(xp.abs(step)) < tol:
+            held = held | (~done & ~xp.all(xp.abs(new) < _LNK_BOUND, axis=1))  # NaN included
+            lnK = xp.where((held | done)[:, None], lnK, new)
+            beta = xp.where(done, beta, bb[:n])
+            last = xp.where(done, last, xp.max(xp.abs(step), axis=1))
+            done = done | (~held & (last < tol))
+            if xp.all(done | held):
                 break
         beta = _rachford_rice(z, xp.exp(lnK), beta)
-        last = xp.max(xp.abs(step), axis=1)
         return lnK, beta, ~held & ((last < 1e-6) | (beta <= 0.0) | (beta >= 1.0))
 
     def _result(self, T, P, z, K, beta) -> Flash:
@@ -593,10 +597,6 @@ class PengRobinson:
         V = xp.where(liquid, 0.0, xp.where(vapor, 1.0, beta))
         x = xp.where(liquid[:, None], z, x)
         y = xp.where(vapor[:, None], z, y)
-        if not self._stacks(T):
-            h = (1 - V) * self.h(T, P, x, "liquid") + V * self.h(T, P, y, "vapor")
-            s = (1 - V) * self.s(T, P, x, "liquid") + V * self.s(T, P, y, "vapor")
-            return Flash(T=T, P=P, V=V, x=x, y=y, K=K, h=h, s=s)
         # The h and s of each phase, as `h` and `s` give them, from one stacked state.
         n = len(T)
         T2, P2, X, phase = self._stack(T, P, x, y)
@@ -642,7 +642,9 @@ class PengRobinson:
         Newton in T on PT flashes, each warm-started from the last, with T and T + dT
         flashed in one batch, kept inside a bracket once the residual has changed sign and
         bisecting when a step leaves it.  The property has a kink at each phase boundary,
-        where Newton alone oscillates."""
+        where Newton alone oscillates.  Each row is held where it converges while the
+        others continue, so that its result does not depend on the other rows of its
+        batch."""
         xp = self.xp
         P = xp.asarray(P, dtype=float)
         z = xp.asarray(z, dtype=float)
@@ -652,6 +654,7 @@ class PengRobinson:
         hi = xp.full_like(T, xp.inf)
         K = None if K0 is None else xp.asarray(K0, dtype=float)
         dT = 1e-4
+        done = xp.zeros(n, dtype=bool)
         for _ in range(max_iter):
             both = self.flash_PT(
                 xp.concatenate([T, T + dT]),
@@ -670,10 +673,12 @@ class PengRobinson:
             new = xp.where(outside, mid, new)
             new = xp.maximum(new, self.c.T_nodes[0] + 1.0)
             step = new - T
-            T = new
-            K = both.K[:n]
-            if xp.all(xp.abs(step) < tol * T):
+            T = xp.where(done, T, new)
+            K = both.K[:n] if K is None else xp.where(done[:, None], K, both.K[:n])
+            done = done | (xp.abs(step) < tol * new)
+            if xp.all(done):
                 return self.flash_PT(T, P, z, K0=K)
+        step = xp.where(done, 0.0, step)
         raise RuntimeError(
             f"P{target.upper()} flash did not converge: step {float(xp.max(xp.abs(step))):.3g} K"
         )
@@ -752,8 +757,8 @@ def _rachford_rice(z, K, beta0, tol: float = 1e-14, max_iter: int = 100):
     if len(rows) == 0:
         return beta
     zr, Kr = z[rows], Km1[rows]
-    lo = 1.0 / (1.0 - Kmax[rows])
-    hi = 1.0 / (1.0 - Kmin[rows])
+    pole_lo = lo = 1.0 / (1.0 - Kmax[rows])
+    pole_hi = hi = 1.0 / (1.0 - Kmin[rows])
     b = xp.clip(beta[rows], lo + 1e-9 * (hi - lo), hi - 1e-9 * (hi - lo))
     finished = xp.zeros(len(rows), dtype=bool)
     for _ in range(max_iter):
@@ -767,6 +772,11 @@ def _rachford_rice(z, K, beta0, tol: float = 1e-14, max_iter: int = 100):
         # lands on the bracket's end, which a test with <= would take for leaving it,
         # sending the row to bisect the bracket down to the tolerance.
         new = xp.where((new < lo) | (new > hi), 0.5 * (lo + hi), new)
+        # The poles end the bracket until the sum changes sign, and the sum is infinite
+        # there.  A step or a midpoint that reaches one, which happens where the root lies
+        # within round-off of it (a trace of a component with an extreme K), leaves the
+        # row where it is; the row then stops.
+        new = xp.where((new <= pole_lo) | (new >= pole_hi), b, new)
         done = xp.abs(new - b) <= tol * (1.0 + xp.abs(b))
         b = xp.where(finished, b, new)
         finished = finished | done

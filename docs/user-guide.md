@@ -59,6 +59,16 @@ A configuration has these sections; every one except the structure may be omitte
 | `instruments` | loop name to `Instrument` arguments | `{"reactor C_A": {"deadtime": 5.0}}` |
 | `actuators` | loop name to `Actuator` arguments | `{"reactor T": {"tau": 0.5}}` |
 | `disturbance` | a named disturbance and its arguments, or a list of them | `{"name": "throughput", "fraction": 0.1}` |
+| `mismatch` | parameter overrides applied to the plant only, by dotted path | `{"reactor.U": 300.0}` |
+| `x0` | state name to its value at the start | `{"T": 367.4}` |
+| `hold` | input name to a constant value; the loops that write it are removed | `{"Fj": 0.5}` |
+| `noise` | a seed, and measurement name to the standard deviation of its noise in a stepped run | `{"seed": 0, "std": {"T": 0.5}}` |
+
+`params` and `mismatch` change the same parameters in two ways. Under `params` the design is solved for the changed parameters, and the loops are biased from that design, so the regulatory layer moves with the plant. Under `mismatch` the design is solved without them; the run starts at that design, with its biases and set-points, and only the plant's right-hand side and measures take the changed parameters. This is model-plant mismatch, and it needs no design for the changed parameters, which may have none. `setup.nominal` is then the design the loops were biased from, and `setup.spectrum()` raises, since the start is not a steady state of the plant. A mismatch that changes neither the right-hand side nor a measurement at the design point is refused: a parameter that the design turns into an input, such as a feed condition, stays at the design and is changed by a disturbance instead. The cases whose models read the parameters they are passed support `mismatch` (`jacketed_cstr`, `reactor_separator_recycle` and the template); the NGL cases refuse it, and `reactor_separator_recycle` refuses the column pressures, on which its tray temperature loop and its heat-exchanger networks are built.
+
+A run starts at the design point unless `x0` names other values for some of its states, by the names `case.state_names(design)` gives them. Instrument and derivative-filter states then start at rest at that state, reporting its true measurement. Actuators start at the design position of their valve and integrals at zero, so each loop begins with an error and only its proportional action. `setup.x0` is the start.
+
+`hold` fixes a scalar input for the whole run. Every loop or ratio station that writes the input is removed, and so is a cascade primary whose secondary is removed; `setup.held` lists them. A ratio station that follows a held input stays. A held input changes the ownership of the structure, so the configuration is refused when another section names a removed loop, when a disturbance changes the held input at the start or at a time it declares, and for an input that is not a scalar. An input held at a value other than its design value moves the plant from its design point, and `setup.spectrum()` then raises, as under `mismatch`. `x0` and `hold` together describe the region-of-attraction grids and recoverability checks of a study as a `[sweep]`, for example over `"x0.T"` and `"hold.Fj"`.
 
 `case.config(...)` fills in the case's default options and rejects a structure or option the case does not have. Every name is checked when the plant is built: an unknown loop, parameter path or disturbance raises instead of being ignored. `config.to_dict()` and `Config.from_dict()` convert to and from plain data, and `config.key()` is a stable hash of it.
 
@@ -122,9 +132,114 @@ A disturbance is a function `d(t, u0) -> u` returning the inputs in force at tim
 {"name": "ramp", "field": "F0", "value": 3.5, "t": 10.0, "duration": 60.0}
 ```
 
-Cases add named disturbances where the change is not a change of one input, such as `reactor_separator_recycle`'s `throughput`, which acts through whichever input sets production in the chosen structure. A list of disturbances is applied in order.
+Cases add named disturbances where the change is not a change of one input, such as `reactor_separator_recycle`'s `throughput`, which acts through whichever input sets production in the chosen structure. A list of disturbances is applied in order, each to the inputs the previous ones produced, so two fractional steps of one input compound: +5% and then +10% of `CA0` give +15.5%.
 
-A disturbance that changes the inputs discontinuously declares the times it does so as an attribute `times`; `step`, `ramp` and `combine` set it. `plantbench.run` restarts the integration at those times and at every scheduled set-point change, so the solver never steps across one. A disturbance written by hand should set `times` as well. `control.simulate`, which the `reactor_separator_recycle` study scripts use, integrates in one call, as the reference results were produced.
+A `sequence` moves an input through levels that do not compound, each relative to the nominal inputs. `of` names the disturbance the sequence is made of, `step` by default or any the case provides; `level` names the argument that takes each level, `fraction` by default; the other arguments are passed to every part, with its time:
+
+```python
+{"name": "sequence", "field": "CA0", "times": [10.0, 40.0], "levels": [0.05, 0.10]}
+{"name": "sequence", "of": "feed_temperature", "level": "change",
+ "times": [50.0, 150.0, 300.0], "levels": [-4.0, 6.0, 0.0]}
+```
+
+A `random_sequence` draws the times and the levels from a seed, as identification data are excited: the first switch at `start`, each next one after a dwell drawn uniformly in `dwell`, the last before `end`, and each level uniform in [`low`, `high`] (`kind = "uniform"`, an amplitude-modulated pseudo-random binary signal) or one of the two bounds (`kind = "binary"`):
+
+```python
+{"name": "random_sequence", "of": "throughput", "seed": 3, "low": -0.12, "high": 0.15,
+ "dwell": [100.0, 400.0], "start": 30.0, "end": 1500.0}
+```
+
+The seed is part of the configuration, so a sweep over `"disturbance.seed"` gives a reproducible set of excitations, each run identified by its seed. Every switching time is declared, and the integration restarts there. `core.disturbances.sequence`, `step_sequence` and `random_levels` build the same disturbances in code. The setup's disturbance carries the levels it was built with as `levels`.
+
+A disturbance that changes the inputs discontinuously declares the times it does so as an attribute `times`; `step`, `ramp`, `combine` and the sequences set it. `plantbench.run` restarts the integration at those times and at every scheduled set-point change, so the solver never steps across one. A disturbance written by hand should set `times` as well. `control.simulate`, which the `reactor_separator_recycle` study scripts use, integrates in one call, as the reference results were produced.
+
+## Stepping a plant
+
+A controller outside the library, a policy that acts once per control interval, needs the plant advanced one interval at a time rather than a whole trajectory. `pb.Stepper` holds a configured plant, its time and its closed-loop state between steps:
+
+```python
+case = pb.load_case("jacketed_cstr")
+setup = pb.build(case, case.config("composition cascade", disturbance={"name": "feed_temperature", "value": 340.0}))
+stepper = pb.Stepper(setup, dt=0.5, inputs=["Fj"])   # the caller owns the coolant flow
+obs = stepper.observe()                              # t, x, u, y, c at the start
+for k in range(400):
+    obs = stepper.step({"Fj": policy(obs.y)})         # held over [t, t + 0.5]
+```
+
+The caller owns inputs, the set-points of loops, or both, and each action names exactly what is owned. An owned input is removed from the structure with every element that writes it, as a configuration's `hold` removes it: here both loops of the cascade, which `stepper.displaced` returns as `Loop` objects with their tunings. The action sets the input before the remaining loops are evaluated, so a ratio station that follows it follows the action. An owned set-point leaves its loop in place. Ownership is refused for an input the configuration holds or a disturbance changes, for the set-point of a loop that is removed or whose set-point a cascade primary writes, and for a set-point with a schedule.
+
+The action is held over the interval (zero-order hold), and the integration restarts at each breakpoint of the disturbance and the set-point schedules inside it. Each `step` returns a `Step`: the time, the plant state, the inputs, the case's measurements, the signals of the remaining loops and the right-hand-side evaluations the interval took. `step()` without an action holds the nominal one, `stepper.nominal_action()`, which leaves the plant as configured; with nothing owned, a stepped run is the run of `pb.run` to the solver's tolerance. The stepper starts where the configuration starts the run, at `setup.x0`, and `reset()` returns it there. An interval whose integration fails raises `StepFailed` and leaves the stepper where the interval began.
+
+A configuration's `noise` section gives the measurements a sampled instrument reports with white noise: at each sample, the start and the end of every step, each named measurement receives a draw of zero mean and the given standard deviation. The draws come from a generator of their own, seeded by the section's `seed`, so the noise and a scenario's random disturbance (`random_sequence`) vary independently. `Step.y` holds the measured values and `Step.y_true` the true ones, which the loops that remain see as well, as in a continuous run; the noise never enters the right-hand side. `observe()` returns the current sample without drawing again, and `reset()` seeds the generator again, from the section or from `reset(noise_seed=...)`. A continuous run has no samples, so `pb.run`, ensembles and dataset generation refuse a configuration with `noise`; the noise of an `Instrument` (`noise_std`) remains unimplemented for the same reason.
+
+A stepper sees the plant at its samples only, and a measurement can leave a limit between two samples and return before the next. `extrema` names measurements whose smallest and largest true values over each interval a step reports, in `Step.y_min` and `Step.y_max`:
+
+```python
+stepper = pb.Stepper(setup, dt=1.0, extrema=["T"], refine=10)
+st = stepper.step()
+st.y_min["T"], st.y_max["T"]
+```
+
+The values are taken on the solver's dense output at `refine` equal parts of each segment of the interval, the segments being the parts between breakpoints, and on both sides of each breakpoint, where an input that steps makes a measurement that reads it jump. The interval's ends are included. The refinement changes nothing in the integration. The values are numerical estimates that converge as `refine` grows, not guaranteed bounds of the continuous-time signal: an excursion shorter than one part can still be missed.
+
+`step_budget` limits the wall-clock seconds of one step, and `episode_budget` those of all the steps since the start or the last `reset()`; the caller's own time between steps does not count. A step that stalls inside LSODA cannot be interrupted from Python, since the solver is compiled and a signal reaches only the main thread of a POSIX process. A stepper with either budget therefore integrates in a worker process of its own, spawned once and kept until `close()` or the end of a `with` block. When a step runs over, the worker is terminated and the step raises `control.WallTimeExceeded`. The stepper is then invalid, and a new one is built to go on. This works from any thread and on any platform:
+
+```python
+with pb.Stepper(setup, dt=0.5, inputs=["Fj"], step_budget=10.0, episode_budget=600.0) as stepper:
+    for k in range(400):
+        obs = stepper.step({"Fj": policy(obs.y)})
+```
+
+The worker builds the plant again from the case's module and the configuration, which takes as long as `pb.build` does, within `startup_budget` seconds if one is given. A case must therefore be importable in a fresh process: a built-in case, an installed one or one defined in an importable module. A case defined in a script, or changed after import, is refused a budget and steps without one. A setup changed after `build` is refused as well, since the worker would step another plant.
+
+A policy that acts on many closed loops at once, the starts of a map, the scenarios of a stress set or the environments of a training run, evaluates its action once on the batch of their observations. `pb.EnsembleStepper` advances the members together, by the lockstep Rodas5P integrator of the ensembles (Ensembles in lockstep), each from the state it reached:
+
+```python
+case = pb.load_case("jacketed_cstr")
+configs = [case.config("temperature PI", disturbance={"name": "feed_temperature", "value": v})
+           for v in (330.0, 340.0, 345.0)]
+ens = pb.EnsembleStepper.from_configs(case, configs, dt=0.5, inputs=["Fj"])
+obs = ens.observe()
+for k in range(400):
+    obs = ens.step({"Fj": policy(obs.y)})    # obs.y["T"] is one value per member
+```
+
+Each member is a `Stepper` of its own (`ens.members`), which decides what ownership, the nominal action, noise and observations mean, as for one plant. An action gives one value per member, or one for all. `EnsembleStep.steps[i]` is member i's `Step`, which a `Monitor` reads as it reads a scalar stepper's, and `y`, `y_true`, `u`, `y_min` and `y_max` hold the same values as arrays over the members. The members must share one design and the layout of their structures, as the members of an ensemble run do; `from_configs` builds them on one design and refuses configurations that need different ones. The design must declare a batched right-hand side.
+
+A member agrees with a scalar stepper of its configuration to the solver's tolerance, not to the last bit, since the integration is Rodas5P rather than LSODA. It does not depend on the other members: alone, or in another order, it steps bit for bit as it does in the ensemble. `extrema` are taken at `refine` equal parts of the whole interval, the same for every member, and on both sides of each of the member's own breakpoints. A member whose integration fails has its `StepFailed` in `errors`, NaN in the arrays and no `Step`; it stays where its interval began, and the others go on until `reset()`. With `step_budget` or `episode_budget`, one worker process integrates every member, and a step that runs over terminates it: all the members are lost, and the ensemble stepper cannot be used again.
+
+## Limits and outcomes
+
+A case declares the span, the alarm and trip limits, and the open-loop steady states of the measurements it bounds, `case.limits(design)`, a `core.limits.Limits` per measurement name. Each number is tagged as the case cards tag theirs: `"source"` when the case's reference gives it, `"choice"` when the case decides it, with the reason in `why`:
+
+```python
+case = pb.load_case("jacketed_cstr")
+lim = case.limits(pb.build(case).design)
+lim["T"].trip_hi            # Limit(value=372.0, basis='choice', why='10 K above the design point ...')
+lim["T"].steady_states      # (338.22..., 362.40..., 377.08...), low-temperature branch first
+```
+
+The spans are those the loops express their signals in percent of (`pv_range`), from one definition. The steady states are those of the plant at the design's inputs, so a `hold` or a `mismatch` moves them. The case cards list every limit.
+
+Whether a limit ends a run is a decision of the study, so it is data as well. A `Rule` names an outcome, a measurement, a side of a level and a dwell, the time the measurement must stay beyond the level without a break. `limit_rules` makes rules from a case's limits, and a `Monitor` applies them to the samples of a run:
+
+```python
+from plantbench.core.limits import Monitor, Rule, check, limit_rules
+
+rules = [*limit_rules(lim, "trip"),                                   # T above 372 K
+         Rule("extinction", "T", "below", lim["T"].alarm_lo.value, dwell=20.0)]
+monitor = Monitor(rules)
+stepper = pb.Stepper(setup, dt=0.5, inputs=["Fj"], extrema=["T"])
+obs = stepper.observe()
+monitor.step(obs)
+while monitor.first is None and obs.t < 200.0:
+    obs = stepper.step({"Fj": policy(obs.y)})
+    monitor.step(obs)
+monitor.first               # Violation(rule, t, value, since, sampled), or None
+check(trajectory, rules)    # the same over the grid of a `Trajectory`
+```
+
+The monitor reads true values, `Step.y_true`, not the measured ones that a configuration's `noise` perturbs. It records the first violation of each rule in `violations` and the earliest in `first`. The time beyond a level is counted from the last sample within it, since the crossing lies after that sample, so a sampled check reports a dwell no later than the plant reaches it. A step that reports the extremes of its interval (`extrema`) adds two things: an interval whose extremes show the measurement back within the level restarts the count at the interval's start, and a rule without a dwell is met between samples when an extreme lies beyond its level while the samples do not. Such a violation has `sampled = False`. It is an estimate made on the refined dense output, and the crossing lies somewhere between `since` and `t`.
 
 ## Linear analysis
 
@@ -138,6 +253,24 @@ ctl.damping_ratio(ev)                  # 0.013 for D4
 
 The Jacobian is taken by central differences on the closed-loop right-hand side, including the integral, instrument and actuator states. One structural zero per ratio station is removed.
 
+A stepper holding one action defines a map over one interval, y_{k+1} = F(y_k), on the plant state and the states of the loops that remain. `plantbench.core.stepmap` finds its fixed point, by `scipy.optimize.fsolve`, which finds unstable fixed points as well as stable ones, and linearizes it there by central differences:
+
+```python
+from plantbench.core import stepmap
+
+setup = pb.build("jacketed_cstr")
+lin = stepmap.linearize(pb.Stepper(setup, dt=0.5, inputs=["Fj"]))   # Fj held at its design value
+lin.eigenvalues            # 1.03048, 0.93475, 0.67067: exp(lambda dt) of the open-loop reactor
+lin.stable, lin.decay_time # False, and 7.41 min for the slowest stable mode
+lin.shares(scale={"T": 45.0})   # each state's share in the dominant mode
+```
+
+`lin.y` is the fixed point, in the coordinates `lin.names`, and `lin.residual` how far it is from one. The map is the stepper's own integration of an interval at tolerances of 1e-11 and 1e-12, tighter than a step's, so that the differences resolve its derivative. Noise enters the samples only and has no part in the map, and the stepper is left at its time, its state and its noise generator. A map depends on time under a disturbance or a set-point schedule, so such a stepper is refused. The integrals of ratio stations never change and are not coordinates.
+
+With nothing owned, or with owned inputs and set-points held, the loops that remain act continuously within the interval, and the eigenvalues of the map are exp(lambda dt) of the continuous closed loop's: of `setup.spectrum()` when nothing is owned, 0.97452 for the slowest mode of `temperature PI` at dt = 0.5 min. A controller sampled at dt with a memory of its own, a sampled PI loop say, makes the map's state larger than this, and the equality does not hold for it. At a fixed point where a valve sits at a limit the closed loop is not differentiable; the differences then average its two sides, and the eigenvalues describe neither.
+
+The shares of a mode depend on how the coordinates are scaled. By default each is scaled by max(|y_i|, 1), the scale of the differences; `scale` gives others by name, a measurement's span for instance.
+
 ## The batched Jacobian and GPUs
 
 LSODA forms the Jacobian of the closed loop by forward differences, one evaluation of the right-hand side per state. On a plant with several hundred states and an equation of state inside its right-hand side, these evaluations are almost the whole cost of a run: on `ngl_deethanizer`, 97 % of them. A case whose right-hand side and measures accept a batch of states can instead have the whole Jacobian evaluated as one batch and handed to LSODA:
@@ -149,7 +282,7 @@ traj = pb.run(case, config, t_end=60.0, jacobian="batched", device="cuda")  # on
 
 and from the command line, `plantbench run ngl_deethanizer --jacobian batched` and `plantbench generate spec.toml --jacobian batched --device cuda`. The default, `jacobian="internal"`, is LSODA's own Jacobian, with which every published result was produced. The batched Jacobian agrees with it to the accuracy of the differences, so a trajectory agrees to the solver's tolerance but not to the last bit; a dataset records the option on each run made with it, under `solver`, and the specification's fingerprint does not include it. `setup.spectrum()` and `ctl.closed_loop_spectrum(..., jacobian="batched")` use the same batch for the linearization.
 
-On the host, a 20-minute run of `ngl_deethanizer` with a step in the feed's ethane takes 8 s with the batched Jacobian against 48 s with LSODA's own, and its states differ by at most 1e-10 relative; `benchmarks/jacobian.py` measures this for each case and device, and `benchmarks/scaling.py` the time of one batched evaluation against the size of the batch. `ngl_deethanizer` and `ngl_demethanizer` declare a batched right-hand side; `reactor_separator_recycle` and `jacketed_cstr` do not.
+On the host, a 20-minute run of `ngl_deethanizer` with a step in the feed's ethane takes 8 s with the batched Jacobian against 48 s with LSODA's own, and its states differ by at most 1e-10 relative; `benchmarks/jacobian.py` measures this for each case and device, and `benchmarks/scaling.py` the time of one batched evaluation against the size of the batch. `ngl_deethanizer`, `ngl_demethanizer`, `jacketed_cstr` and the base plant of `reactor_separator_recycle` declare a batched right-hand side; the heat-integrated plants of `reactor_separator_recycle` do not, so they have neither the batched Jacobian nor ensembles.
 
 On a node with one NVIDIA A100 (80 GB, PCIe), the same run takes 125 s with LSODA's own Jacobian, 26 s with the batched Jacobian on the host and 12 s with it on the GPU, whose states differ from the host's by at most 5e-11 relative. On a GPU, the cost of one evaluation is set by the number of array operations it issues, each a kernel launched from the host at a nearly fixed cost, rather than by the number of states. The state of a phase, its fugacities and the Rachford–Rice solve therefore run as one CUDA kernel each (`plantbench.units._kernels`), and one evaluation of either NGL case costs about the same from 16 to more than 1,000 states: 0.034 s for `ngl_deethanizer` and 0.27 to 0.30 s for `ngl_demethanizer`. A single run gains little from this, since between Jacobians LSODA advances the solution one state at a time; a single run belongs on a CPU node. The device pays when a batch holds many Jacobians: 64 of `ngl_deethanizer`, 23,104 states, take 0.071 s, 3.1 µs a state against 2.0 ms on the host, and 64 of `ngl_demethanizer` take 0.44 s.
 
@@ -166,7 +299,7 @@ traj = results[0].trajectory        # or results[0].error, for a member that fai
 
 and from the command line, `plantbench generate spec.toml --ensemble 64 --device cuda`. Members share a design when they have the same structure, options and parameters, and they are run together when their control structures also have the same state layout; across members, the tunings, set-points, set-point steps, instrument and actuator parameters and disturbances may all differ. Each step evaluates the right-hand sides of every member still running as one batch, and the Jacobians of those that need one as another, so that on a GPU, where an evaluation costs about the same from one state to a few thousand, an ensemble of many members costs little more per step than one.
 
-The integrator is the Rosenbrock method Rodas5P (Steinebach, 2023), of order 5 with an embedded estimate of order 4, rather than LSODA: a Rosenbrock method does the same, fixed work every step, an exact Jacobian and eight solves with it, which is what lets members with different step sizes share every evaluation. Each member has its own time, step size and error control, and its steps end on its own breakpoints and on the output grid. A member that fails stops, and the others go on; `wall_budget` applies to the ensemble, and `generate` gives an ensemble the specification's budget, which is per run, times its number of members. The trajectories agree with LSODA's to the tolerance, not to the last bit: over a 20-minute run of `ngl_deethanizer`, to within half a tolerance (|Δx| ≤ 0.46 (atol + rtol |x|)), and against a run at a relative tolerance of 1e-11 the ensemble's states are the closer of the two. A dataset records `solver = {"ensemble": M, "device": ...}` on each run made this way, with `ensemble_size` and `ensemble_wall_time` beside the run's share of the wall time.
+The integrator is the Rosenbrock method Rodas5P (Steinebach, 2023), of order 5 with an embedded estimate of order 4, rather than LSODA: a Rosenbrock method does the same, fixed work every step, an exact Jacobian and eight solves with it, which is what lets members with different step sizes share every evaluation. Each member has its own time, step size and error control, and its steps end on its own breakpoints and on the output grid. On the host, a member's trajectory does not depend on the other members: alone, or in another ensemble, it is the same to the last bit. A member that fails stops, and the others go on; `wall_budget` applies to the ensemble, and `generate` gives an ensemble the specification's budget, which is per run, times its number of members. The trajectories agree with LSODA's to the tolerance, not to the last bit: over a 20-minute run of `ngl_deethanizer`, to within half a tolerance (|Δx| ≤ 0.46 (atol + rtol |x|)), and against a run at a relative tolerance of 1e-11 the ensemble's states are the closer of the two. A dataset records `solver = {"ensemble": M, "device": ...}` on each run made this way, with `ensemble_size` and `ensemble_wall_time` beside the run's share of the wall time.
 
 On the host an ensemble gains nothing, since its evaluations cost in proportion to their size: a 20-minute run of `ngl_deethanizer` takes 25 s alone or as one of four, against 8 s with the batched Jacobian and LSODA, which remains the choice there. On the A100 node above, the same run takes 38 s as an ensemble of one, and 12 s, 3.1 s and 0.86 s a member in ensembles of 4, 16 and 64: 4,200 runs an hour, about 30 times the 140 an hour of LSODA with the batched Jacobian on one core of that node. The members' states agree with LSODA's to within 0.28 tolerances on either device. `benchmarks/ensemble.py` measures the throughput against the number of members on each device.
 
@@ -230,6 +363,8 @@ or `plantbench.datagen.generate("spec.toml", workers=8)`. A script that generate
 Generation resumes where it stopped. Runs already recorded are skipped, including those that failed, since a failure recurs. An interrupt, or the SIGTERM a scheduler sends to end a job, cancels the runs not yet started; those already running finish, and a resume runs whatever was not recorded. A directory holds one specification, and a changed specification needs a new directory. One generation writes to a directory at a time: a second one started on it is refused. The manifest keeps the specification's fingerprint, the canonical text of everything that decides which runs exist, so a dataset always says which protocol its runs are of.
 
 The commit is recorded only when the library runs from a checkout of its repository; an installed copy records none. The dirty flag looks at the code alone, `plantbench/` and `studies/` without their results and figures, so an edited manuscript or a results file an analysis has just written does not mark a dataset or a result dirty. A dataset built by `run_configurations` from a list of configurations writes a manifest of the same kind, with no specification; a directory of runs with no manifest at all is listed by `plantbench datasets` with its provenance unknown.
+
+`plantbench.provenance()` returns the manifest's record of the library and its environment, the version, commit, dirty flag, package versions, platform and time, for a program that produces results outside `datagen`, such as a training run. Given the id of a case that is not built in, it adds where that case comes from, as `case_source`.
 
 ## Reading a dataset
 

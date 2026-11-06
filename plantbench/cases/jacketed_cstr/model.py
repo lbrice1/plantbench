@@ -15,6 +15,7 @@ unless another branch is asked for.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import ClassVar
 
 import numpy as np
 
@@ -42,6 +43,8 @@ class Design:
     x: np.ndarray
     u: Inputs
     branch: str
+    # The right-hand side and the measures take a batch of states (`control.supports_batch`).
+    batched: ClassVar[bool] = True
 
     def rhs(self, t: float, x: np.ndarray, u: Inputs, pp: ReactorParameters) -> np.ndarray:
         return cstr.rhs_constant_volume(t, x, pp, T0=u.T0, CA0=u.CA0, Fj=u.Fj, F0=u.F0)
@@ -55,10 +58,5 @@ def solve_design(p: ReactorParameters, branch: str = "middle") -> Design:
     if len(roots) != 3:
         raise ValueError(f"these parameters give {len(roots)} steady states, not 3; "
                          "the branch cannot be chosen")
-    T = roots[BRANCHES.index(branch)]
-    # Start the solve on the branch: C_A from the component balance, T_j from the jacket's.
-    CA = p.CA0 / (1.0 + cstr.rate_constant(T, p) * p.V / p.F0)
-    c = p.U * p.A_ht / (p.Fj * p.rhoj * p.cpj)
-    Tj = (p.Tj0 + c * T) / (1.0 + c)
-    x = cstr.steady_state(p, guess=np.array([CA, T, Tj]))
+    x = cstr.steady_state(p, guess=cstr.branch_start(roots[BRANCHES.index(branch)], p))
     return Design(pp=p, x=x, u=Inputs(F0=p.F0, CA0=p.CA0, T0=p.T0, Fj=p.Fj), branch=branch)

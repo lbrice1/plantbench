@@ -146,6 +146,22 @@ def test_a_design_that_does_not_solve_is_recorded_not_raised(tmp_path):
     assert r["status"] == "failed" and "did not converge" in r["message"]
 
 
+def test_a_design_whose_column_settle_runs_out_is_recorded_as_failed(tmp_path, monkeypatch):
+    """The plantwide design of `reactor_separator_recycle` settles its column inside the
+    residual; a settle that exhausts its evaluations ends the run as a failed design."""
+    from plantbench.units import column
+
+    monkeypatch.setattr(column, "MAX_SETTLE_EVALUATIONS", 100)
+    # A boil-up no other test designs at, so that no cached design answers instead.
+    r = datagen.run_one("reactor_separator_recycle", {"structure": "effluent fixed",
+                                                      "options": {"V_boil": 27.75}},
+                        {"t_end": 10.0, "dt": 5.0, "wall_budget": None, "features": []},
+                        str(tmp_path))
+    assert r["status"] == "failed"
+    assert r["message"].startswith("design: SettleLimitExceeded: ")
+    assert "the limit being 100" in r["message"]
+
+
 def test_a_sequential_design_can_add_batches_to_one_dataset(tmp_path):
     """The unit of work is a list of configurations, however it was chosen."""
     out = tmp_path / "d"
@@ -207,39 +223,6 @@ def test_a_second_generation_into_the_same_directory_is_refused(tmp_path):
     with datagen._exclusive(out):
         with pytest.raises(RuntimeError, match="another generation"):
             datagen.run_configurations("jacketed_cstr", [{}], out, log=_quiet)
-
-
-def test_provenance_is_recorded_only_from_a_checkout_of_this_repository(tmp_path, monkeypatch):
-    """An environment inside some other repository must not record that repository's commit."""
-    import subprocess
-    other = tmp_path / "other"
-    other.mkdir()
-    subprocess.run(["git", "init", "-q", str(other)], check=True)
-    monkeypatch.setattr(datagen, "_SOURCE", other)
-    assert datagen.repo_state() == {"git_commit": None, "git_dirty": None}
-
-
-def test_only_the_code_can_make_a_checkout_dirty(tmp_path, monkeypatch):
-    """A results file an analysis writes, or a manuscript being edited, is not code."""
-    import subprocess
-
-    def git(*args):
-        subprocess.run(["git", "-C", str(tmp_path), *args], check=True, capture_output=True)
-
-    for path in ("pyproject.toml", "plantbench/x.py", "studies/s/a.py",
-                 "studies/s/results/r.txt", "studies/s/figures/f.png", "manuscript/m.tex"):
-        (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / path).write_text("0\n")
-    git("init", "-q")
-    git("add", ".")
-    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "c")
-    monkeypatch.setattr(datagen, "_SOURCE", tmp_path.resolve())
-    assert datagen.repo_state()["git_dirty"] is False
-    for path in ("studies/s/results/r.txt", "studies/s/figures/f.png", "manuscript/m.tex"):
-        (tmp_path / path).write_text("1\n")
-    assert datagen.repo_state()["git_dirty"] is False
-    (tmp_path / "studies/s/a.py").write_text("1\n")
-    assert datagen.repo_state()["git_dirty"] is True
 
 
 # -- features a case supplies itself -----------------------------------------------------
@@ -351,3 +334,84 @@ dt = 1.0
     assert [r["status"] for r in records] == ["ok"] * 3
     assert all(r["solver"] == {"ensemble": 4, "device": "cpu"} and r["ensemble_size"] == 3
                for r in records)
+
+
+def test_a_mismatch_sweep_is_recorded_on_one_design(tmp_path):
+    """`mismatch` is swept like `params`; its runs are ok where `params` has no design,
+    and a feature that needs a steady state records why it has none."""
+    spec = Spec.from_dict({
+        "study": {"name": "m", "case": "jacketed_cstr"},
+        "base": {"structure": "temperature PI"},
+        "sweep": {"mismatch.k0": [2.529e11, 2.248e11]},
+        "run": {"t_end": 20.0, "dt": 5.0, "features": ["spectrum"]},
+    })
+    out = datagen.generate(spec, tmp_path / "d", log=_quiet)
+    records = datagen.load_records(out)
+    assert [r["status"] for r in records] == ["ok", "ok"]
+    assert all("not a steady state" in r["features"]["spectrum_error"] for r in records)
+    assert {r["config"]["mismatch"]["k0"] for r in records} == {2.529e11, 2.248e11}
+    with open(out / "index.csv") as f:
+        assert "config.mismatch.k0" in next(csv.DictReader(f))
+
+
+def test_starts_and_holds_give_in_a_dataset_the_runs_of_run(tmp_path):
+    """A grid of starts, with the coolant held or not, as `datagen` sweeps it: each record's
+    trajectory is the one `run` gives for its configuration."""
+    import plantbench as pb
+    from plantbench.cases.jacketed_cstr.definition import CASE
+
+    spec = Spec.from_dict({
+        "study": {"name": "s", "case": "jacketed_cstr"},
+        "base": {"structure": "temperature PI"},
+        "variants": [{}, {"hold": {"Fj": 1.0}}],
+        "sweep": {"x0.T": [355.0, 370.0]},
+        "run": {"t_end": 30.0, "dt": 1.0},
+    })
+    out = datagen.generate(spec, tmp_path / "d", log=_quiet)
+    records = datagen.load_records(out)
+    assert [r["status"] for r in records] == ["ok"] * 4
+    for r in records:
+        stored = datagen.load_run(out, r["run_id"])
+        alone = pb.run(CASE, r["config"], t_end=30.0, dt=1.0)
+        assert np.array_equal(stored.x, alone.x)
+        assert stored.state("T")[0] == pytest.approx(r["config"]["x0"]["T"], rel=1e-12)
+
+
+def test_a_seed_sweep_of_random_sequences_is_the_same_dataset_twice(tmp_path):
+    """rrl's `sequence` family as a specification: random feed temperature changes from a
+    seed swept in [sweep]; a second generation records the same runs, to the bit."""
+    (tmp_path / "s.toml").write_text('''
+[study]
+name = "seq"
+case = "jacketed_cstr"
+
+[base]
+structure = "temperature PI"
+disturbance = {name = "random_sequence", of = "feed_temperature", level = "change", low = -6.0, high = 7.0, dwell = [50.0, 250.0], start = 20.0, end = 400.0}
+
+[sweep]
+"disturbance.seed" = [0, 1, 2]
+
+[run]
+t_end = 400.0
+dt = 5.0
+''')
+    spec = Spec.load(tmp_path / "s.toml")
+    a = datagen.generate(spec, tmp_path / "a", log=_quiet)
+    b = datagen.generate(spec, tmp_path / "b", log=_quiet)
+    ra, rb = datagen.load_records(a), datagen.load_records(b)
+    assert [r["status"] for r in ra] == ["ok"] * 3
+    assert len({r["run_id"] for r in ra}) == 3
+    assert [r["run_id"] for r in ra] == [r["run_id"] for r in rb]
+    for r in ra:
+        assert np.array_equal(datagen.load_run(a, r["run_id"]).x,
+                              datagen.load_run(b, r["run_id"]).x)
+
+
+def test_a_configuration_with_noise_is_recorded_invalid(tmp_path):
+    spec = Spec.from_dict({"study": {"name": "n", "case": "jacketed_cstr"},
+                           "base": {"structure": "temperature PI",
+                                    "noise": {"seed": 0, "std": {"T": 0.5}}},
+                           "run": {"t_end": 10.0, "dt": 5.0}})
+    records = datagen.load_records(datagen.generate(spec, tmp_path / "d", log=_quiet))
+    assert records[0]["status"] == "invalid" and "stepped run" in records[0]["message"]

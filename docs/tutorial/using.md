@@ -16,9 +16,10 @@ cd plantbench-tutorial
 
 ```console
 $ plantbench --version
-plantbench 0.3.0
+plantbench 0.4.0
 $ plantbench list
 jacketed_cstr              Non-isothermal CSTR with a cooling jacket  [built in]
+mma_polymerization_cstr    Isothermal MMA polymerization CSTR  [built in]
 ngl_deethanizer            Deethanizer of an NGL fractionation train  [built in]
 ngl_demethanizer           Demethanizer section of a cryogenic NGL recovery plant  [built in]
 reactor_separator_recycle  Reactor-separator-recycle plant with heat integration  [built in]
@@ -297,7 +298,7 @@ $ plantbench card data/tutorial --format md
 |---|---|
 | Study | `tutorial` |
 | Case | `jacketed_cstr` |
-| Code | `plantbench` 0.3.0 (checkout <commit>, clean) |
+| Code | `plantbench` 0.4.0 (checkout <commit>, clean) |
 | Specification | `data/tutorial/spec.toml`; `pb-spec:7d155fc4b98b` |
 | Runs | 16 completed; 0.0 min of integration |
 | Environment | Python 3.14.7, NumPy 2.5.3, SciPy 1.18.1 |

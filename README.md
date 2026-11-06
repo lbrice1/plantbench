@@ -29,6 +29,7 @@ plantbench generate examples/04_dataset.toml --workers 8
 |---|---|---|
 | `reactor_separator_recycle` | 134 (base plant) | A non-isothermal CSTR on the open-loop unstable branch of its multiplicity, in a recycle loop closed by a thirty-stage column with a purge; four heat-exchanger networks at three column pressures; four regulatory structures. Extends the reactor control example of Romagnoli and Palazoglu (2020); frozen. |
 | `jacketed_cstr` | 3 | The same reactor on its own, with three steady states and structures from open loop to a composition cascade. |
+| `mma_polymerization_cstr` | 4 | The isothermal free-radical polymerization of methyl methacrylate of Doyle, Ogunnaike and Pearson (1995), the initiator flow setting the number-average molecular weight across three grades; structures from open loop to a NAMW loop, and an engineering model without chain transfer as a mismatch. |
 | `ngl_demethanizer` | 299–406 (by scheme and basis) | The demethanizer section of a cryogenic NGL recovery plant in the conventional, gas subcooled and cold residue recycle schemes, a modified version of Chebeir, Salas and Romagnoli (2019); Peng–Robinson thermodynamics; regulatory structure and two recovery cascades. |
 | `ngl_deethanizer` | 354 | A 30-stage deethanizer with feed heater, total condenser and reboiler, constructed from an unpublished HYSYS case; Peng–Robinson thermodynamics; regulatory structure and a composition cascade. |
 
@@ -82,7 +83,7 @@ python3 -m venv .venv
 
 The commands below are written for the pip environment. With uv, replace `.venv/bin/` with `uv run `; with pixi, with `pixi run ` (`pixi run -e study ` for the studies). `python -m plantbench` is equivalent to `plantbench`.
 
-The reference results were produced with Python 3.14.7, NumPy 2.5.3, SciPy 1.18.1, scikit-learn 1.9.1, PaCMAP 0.9.1 and HDBSCAN 0.8.44 on macOS (arm64).
+The reference results were produced with Python 3.14.7, NumPy 2.5.3, SciPy 1.18.1, scikit-learn 1.9.1, PaCMAP 0.9.1 and HDBSCAN 0.8.44 on macOS (arm64). SciPy 1.17 and 1.18 are excluded because their LSODA keeps its work arrays after every solve. With SciPy 1.16.3, the release the lockfiles resolve to, the golden tests reproduce the reference results.
 
 ## Tests
 

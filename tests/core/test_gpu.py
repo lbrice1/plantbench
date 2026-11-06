@@ -84,3 +84,44 @@ def test_an_ensemble_on_the_device_agrees_with_one_on_the_host(setup, tuning):
     m, k, i = np.unravel_index(np.argmax(err), err.shape)
     assert err[m, k, i] < 0.25, (f"member {m}, t = {host.t[k]}, state {i}: host "
                                 f"{host.Y[m, k, i]!r}, device {dev.Y[m, k, i]!r}")
+
+
+@pytest.mark.parametrize("case_id", ["jacketed_cstr", "reactor_separator_recycle",
+                                     "mma_polymerization_cstr"])
+def test_a_reactor_case_on_the_device_is_the_one_on_the_host(case_id):
+    """The batched right-hand side and measurements of the reactor cases, at 8 states 1 %
+    from the design, on the device and on the host."""
+    case = pb.load_case(case_id)
+    d = pb.build(case, case.config()).design
+    X = d.x * (1.0 + 1e-2 * np.random.default_rng(0).standard_normal((8, len(d.x))))
+    u = ctl.batch_inputs(d.u, len(X))
+    ud = ctl.batch_inputs(d.u, len(X), backend.module("cuda"))
+    Xd = backend.to_device(X, "cuda")
+    F = d.rhs(0.0, X, u, d.pp)
+    np.testing.assert_allclose(backend.to_host(d.rhs(0.0, Xd, ud, d.pp)), F, rtol=1e-12,
+                               atol=1e-12 * np.abs(F).max())
+    for name, f in case.measurements(d).items():
+        np.testing.assert_allclose(backend.to_host(f(Xd, ud, d.pp)), f(X, u, d.pp),
+                                   rtol=1e-12, err_msg=name)
+
+
+def test_an_ensemble_stepper_on_the_device_steps_as_on_the_host():
+    from plantbench.core.ensemble_stepper import EnsembleStepper
+    case = pb.load_case("jacketed_cstr")
+    configs = [case.config("temperature PI", disturbance={"name": "feed_temperature",
+                                                          "value": v, "t": 1.25})
+               for v in (330.0, 340.0)]
+    host = EnsembleStepper.from_configs(case, configs, 0.5)
+    dev = EnsembleStepper.from_configs(case, configs, 0.5, device="cuda")
+    # In units of the tolerance, as for the ensemble above, but without equal steps: the
+    # device's arithmetic can change an accepted step, after which the two integrations
+    # agree to the order of the tolerance rather than in the last bits.  On an
+    # A100-SXM4-80GB, member 0 takes 275 evaluations in its fifth step to the host's 259
+    # and then differs by 0.328 of the tolerance; at rtol 1e-10 and atol 1e-12, by 0.020.
+    # Member 1, whose steps do not change, differs by at most 5.99e-14 relative.
+    for _ in range(10):
+        a, b = host.step(), dev.step()
+        for i in range(2):
+            x = a.steps[i].x
+            err = np.abs(b.steps[i].x - x) / (host.atol + host.rtol * np.abs(x))
+            assert np.max(err) < 1.0, f"t = {a.steps[i].t}, member {i}: {err}"

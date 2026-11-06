@@ -81,3 +81,34 @@ def test_the_simulink_tuning_is_poorly_damped_on_this_reactor():
               "reactor C_A": {"Kc": -abs(c["Kc"]), "tau_I": c["tau_I"]}}
     ev = pb.build(CASE, CASE.config("composition cascade", tuning=tuning)).spectrum()
     assert ctl.damping_ratio(ev) == pytest.approx(0.014, abs=0.001)
+
+
+def test_a_mismatch_needs_no_design_for_the_changed_parameters():
+    """k0 lowered by a fifth leaves one steady state, so `params` has no middle branch to
+    design on; as a mismatch the loop stays as designed and the plant changes under it."""
+    k0 = CASE.make_design(CASE.config()).pp.k0
+    with pytest.raises(ValueError, match="steady states"):
+        pb.build(CASE, CASE.config(params={"k0": 0.8 * k0}))
+    s = pb.build(CASE, CASE.config(mismatch={"k0": 0.8 * k0}))
+    assert s.structure == pb.build(CASE, CASE.config()).structure
+    assert s.design.pp.k0 == 0.8 * k0
+
+
+@pytest.mark.parametrize("name", ["CA0", "T0", "F0"])
+def test_a_mismatch_of_a_feed_condition_is_refused(name):
+    """The design turns the feed conditions into inputs, which a mismatch leaves as designed."""
+    p = CASE.make_design(CASE.config()).pp
+    with pytest.raises(ValueError, match="changes neither"):
+        pb.build(CASE, CASE.config(mismatch={name: 1.1 * getattr(p, name)}))
+
+
+def test_holding_the_coolant_under_the_cascade_is_the_open_loop_reactor():
+    """Both loops go, the cascade primary with the loop it writes to, and the run is the
+    open-loop one to the last bit: the 340 K feed carries the reactor to the high branch."""
+    Fj = CASE.make_design(CASE.config()).u.Fj
+    dist = {"name": "feed_temperature", "value": 340.0, "t": 10.0}
+    held = pb.run(CASE, CASE.config("composition cascade", disturbance=dist, hold={"Fj": Fj}),
+                  t_end=200.0, dt=0.5)
+    open_loop = pb.run(CASE, CASE.config("open loop", disturbance=dist), t_end=200.0, dt=0.5)
+    assert np.array_equal(held.x, open_loop.x)
+    assert held.state("T")[-1] > 370.0
