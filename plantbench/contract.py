@@ -178,10 +178,11 @@ def generic_disturbances_act_on_the_inputs(case: Case) -> None:
     _require(isinstance(cs.GENERIC_DISTURBANCES, dict), "no generic disturbances")
 
 
-# A batched evaluation may iterate a member's nested solves (flashes, bubble points) further
-# than a single one stops, since a batch runs until every member has converged; a model
-# whose small inventories amplify those solves' tolerance differs from the single
-# evaluation by about this, relative to its largest derivative.
+# A batched evaluation may solve a member's nested problems (flashes, bubble points)
+# otherwise than a single one, to the same tolerance: the NGL cases take the closed-form
+# cubic for a batch, and a case's own solve may iterate a batch until every member has
+# converged.  A model whose small inventories amplify those solves' tolerance differs from
+# the single evaluation by up to about this, relative to its largest derivative.
 BATCH_TOL = 1e-6
 
 

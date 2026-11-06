@@ -48,6 +48,17 @@ def test_members_agree_with_their_serial_runs(case, results):
             np.testing.assert_allclose(tr.c[k], ref.c[k], rtol=1e-6, atol=1e-9, err_msg=k)
 
 
+def test_a_member_runs_alone_as_in_the_ensemble(case, results):
+    """The disturbed member, whose step and tuning differ from the others', run as an
+    ensemble of one: the same trajectory to the last bit, since the column's bubble points
+    and flashes hold each row where it converges."""
+    alone = run_ensemble(case, _configs(case)[1:2], T_END, dt=0.25)[0].trajectory
+    tr = results[1].trajectory
+    np.testing.assert_array_equal(alone.x, tr.x)
+    for k in tr.y:
+        np.testing.assert_array_equal(alone.y[k], tr.y[k], err_msg=k)
+
+
 def test_batched_outputs_are_the_serial_ones(case):
     """The outputs of one run, evaluated as one batch, against `integrate`'s loop."""
     config = case.validate(case.config(disturbance=STEP))
