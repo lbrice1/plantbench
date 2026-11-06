@@ -86,7 +86,8 @@ def test_an_ensemble_on_the_device_agrees_with_one_on_the_host(setup, tuning):
                                 f"{host.Y[m, k, i]!r}, device {dev.Y[m, k, i]!r}")
 
 
-@pytest.mark.parametrize("case_id", ["jacketed_cstr", "reactor_separator_recycle"])
+@pytest.mark.parametrize("case_id", ["jacketed_cstr", "reactor_separator_recycle",
+                                     "mma_polymerization_cstr"])
 def test_a_reactor_case_on_the_device_is_the_one_on_the_host(case_id):
     """The batched right-hand side and measurements of the reactor cases, at 8 states 1 %
     from the design, on the device and on the host."""

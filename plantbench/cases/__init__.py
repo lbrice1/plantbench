@@ -32,6 +32,7 @@ from plantbench.core.case import Case
 _MODULES = {
     "reactor_separator_recycle": "plantbench.cases.reactor_separator_recycle.definition",
     "jacketed_cstr": "plantbench.cases.jacketed_cstr.definition",
+    "mma_polymerization_cstr": "plantbench.cases.mma_polymerization_cstr.definition",
     "ngl_demethanizer": "plantbench.cases.ngl_demethanizer.definition",
     "ngl_deethanizer": "plantbench.cases.ngl_deethanizer.definition",
 }
