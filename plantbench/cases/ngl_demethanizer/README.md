@@ -9,7 +9,7 @@ case = pb.load_case("ngl_demethanizer")
 
 The case is a modified version of the demethanizer section studied by Chebeir, Salas and Romagnoli (2019), *Operability assessment on alternative natural gas liquids recovery schemes*, J. Nat. Gas Sci. Eng. 71, 102974, hereafter referred to as the paper. The paper gives the flowsheets of three recovery schemes (its Figs. 1–3), the feed (Table 1), the equipment sizes (Section 3.1), the regulatory structure and its tuning (Fig. 4, Section 3.2, Table 2), a dozen stream conditions of the conventional scheme (Section 2), and closed-loop results (Section 4). It gives no stream table, no conditions for the other two schemes and no equation of state.
 
-A second source is the unpublished HYSYS 12 case "Demethanizer - Tuned", a converged cold residue recycle plant on its own ten-component feed, with its workbook, stream, heat-exchanger and column reports. It fixes the cold residue recycle topology that the paper's Fig. 3 leaves open, and it is authoritative for the `hysys` basis. Its streams, column profile, machine powers and controller ranges are transcribed in `hysys_reference.json`.
+A second source is the unpublished HYSYS 12 case "Demethanizer - Tuned", a converged cold residue recycle plant on its own ten-component feed, with its workbook, stream, heat-exchanger and column reports. It fixes the cold residue recycle topology that the paper's Fig. 3 leaves open, and it is authoritative for the `hysys` basis. Its streams, column profile, machine powers and controller ranges are transcribed in `hysys_reference.json`. The file's `inspection` section holds a later reading of the case file, "Demethanizer - Tuned(1).hsc" (SHA256 56c4c73b4217767e070c4aa0ec699458c82405edd8541a94c743b244ec72a0a7), through the HYSYS COM interface with the integrator stopped: its recovery and ratio set-points, NGL flow, duties, machine powers, and ERIC-100 and RIC-100.
 
 In `parameters.py`, each constant carries its source: `[C]` for the paper, `[H]` for the HYSYS case, `[D]` for a value derived from them, and `[choice]` for a value neither gives. The case departs from the paper as follows.
 
@@ -119,7 +119,7 @@ A negative gain means that raising the manipulated variable lowers the measureme
 | XIC-100 | 0 to 1 | 0 to 2722 kW | 1.0 | 120 |
 | RFIC-100 | 0 to 1 | 0 to 50 kW | 0.5 | 30 |
 
-ERIC-100 is tuned for this case. On the ratio it has a positive gain: at a fixed TK-100 temperature, raising R by 5 % raises the recovery by 0.0064 under both gsp and crr, because less of the TK-100 vapor goes to the branch.
+ERIC-100 is tuned for this case, for damping. The tuned HYSYS case has its own ERIC-100, on the TIC-100 set-point at 0.005 %/% and 3 s, with an output range of −50 to 0 °C, holding a recovery of 0.82 (inspection). On the ratio it has a positive gain: at a fixed TK-100 temperature, raising R by 5 % raises the recovery by 0.0064 under both gsp and crr, because less of the TK-100 vapor goes to the branch.
 
 The damping ratio of each structure is the smallest among the oscillatory modes of the closed loop linearized at the design point. The values below are from `studies/ngl_demethanizer/tuning.py`.
 
@@ -142,7 +142,7 @@ The slowest mode is the time constant of the rightmost eigenvalue λ, −1/Re λ
 Two loops of the paper are not separate loops here, because the case makes the controlled quantity itself an input:
 
 - **FIC-100.** `F_feed` is an input, so the feed-flow loop is the input.
-- **RIC-100.** R is the input `split`, so the ratio station is the input, and `recovery cascade on ratio` writes R directly.
+- **RIC-100.** R is the input `split`, so the ratio station is the input, and `recovery cascade on ratio` writes R directly. R is not the HYSYS case's ratio. Its RIC-100 measures F18 / F17, the branch (the bypass vapor and the branch liquid) over the expander flow, at a set-point of 0.69, and manipulates Q3, the shaft energy the expander passes to the booster. R is the expander flow over the bypass vapor alone, 1.6237 at the `hysys` design, where F18 / F17 is 0.6896 (`hysys_reference.hysys_ratio`).
 
 The recovery set-point sequence of the paper's Section 4.7, 0.82 → 0.902 → 0.7667, is given as `setpoint_steps` on the `ethane recovery` loop:
 
@@ -214,6 +214,38 @@ All three follow from the ideal-gas machines and the cell exchangers.
 - After a +10 % step in the feed flow, the recovery settles at 0.807, a fall of 1.6 % against the paper's 2 % (Section 4.2).
 - After a +10 % step in the feed ethane, the recovery settles at 0.817.
 
+## Comparison with the tuned HYSYS case
+
+The `hysys` basis designs at the TK-100 temperature of the reports, −38.71 °C, and recovers 0.8296. The HYSYS case's ERIC-100 holds 0.82. `hysys_reference.config()` is the configuration of the comparison: the crr scheme on the `hysys` basis under `recovery cascade`, designed at a recovery of 0.82, at which TK-100 is at −38.17 °C. `tests/cases/ngl_demethanizer/test_hysys_inspection.py` compares it with the inspection and the reports at one criterion per kind of quantity: product flows within 1 %, internal flows and ratios within 3 %, duties and powers within 5 %, temperatures within 1 K. A quantity outside its criterion is asserted as an exception.
+
+| Quantity | HYSYS, inspection | `hysys` basis | `hysys_reference.config()` | Criterion |
+|---|---|---|---|---|
+| Ethane recovery | 0.82, set-point | 0.829602 | 0.820000 | specification |
+| NGL, kmol/h | 561.13 | 565.804 | 561.136 | met |
+| F18 / F17 | 0.69, set-point | 0.68959 | 0.68692 | met |
+| Chiller duty, kW | 3498.26 | 3461.885 | 3404.059 | met |
+| Reboiler duty, kW | 1522.42 | 1533.842 | 1507.766 | met |
+| Expander power, kW | 1154.55 | 1150.806 | 1160.331 | met |
+| K-101 power, kW | 8079.16 | 8276.871 | 8282.236 | met |
+| K-102 power, kW | 25.01 | 28.848 | 28.983 | exception |
+
+At a recovery of 0.82, every stage temperature is within 0.69 K of the column report, and the exchanger outlets, the NGL and the K-101 discharge within 0.9 K. The residue gas leaving E-100 is 2.2 K warm, the second exception. Both exceptions follow from the ideal-gas machines and the cell exchangers. Aligning the recovery brings the NGL flow to HYSYS's and moves the chiller duty away from it; these are coupled design results, and no single parameter is identified by them.
+
+The case departs from the HYSYS case in the following, beyond the tuning of ERIC-100. Each is either a reduction the case keeps, for the reason in Provenance or Control structures, or open.
+
+| Difference | Disposition |
+|---|---|
+| FIC-100 is an input, not a loop | kept: the feed is the throughput |
+| RIC-100 is the input `split`, a different ratio, with no Q3 loop | kept: restoring it needs the expander flow, the shaft power and the hydraulics solved together |
+| Linear liquid valves; a fixed liquid share of the branch, 0.561 | kept |
+| Stage 1 a mixing point without holdup, where HYSYS holds about 3.12 kmol (inspection) | kept: an equilibrium stage 1 left the steady state undetermined |
+| No tray vapor holdup; one lumped pressure state; levels at fixed densities | kept |
+| First-order flow transmitters on the NGL, recycle and residue-gas flows | kept: a loop reads its measurement before its manipulated variable is written |
+| Ideal-gas booster, K-101 and K-102 | open: the K-102 power and the residue gas leaving E-100 |
+| The exchanger pressure paths: in HYSYS the branch is let down to about 1202 kPa before E-103 and leaves it at about 1031 kPa, and the recycle side falls to about 1010 kPa; here the branch side of E-104 stays near 1202 kPa with the rest of its let-down at the column, and the recycle side near 1036 kPa | open |
+| The NGL after its valve, in HYSYS about 1104 to 1000 kPa and −19.83 to −22.68 °C, at a vapor fraction of about 0.0245 | open: the NGL is reported before its let-down; its overall composition, which XIC-100 reads, is the same |
+| The property data of the two Peng–Robinson implementations | open: HYSYS's interaction parameters are not exported |
+
 ## Verification
 
 `tests/cases/ngl_demethanizer/` holds the case's own tests:
@@ -221,6 +253,7 @@ All three follow from the ideal-gas machines and the cell exchangers.
 - **`test_design.py`.** Each stored design is a steady state. Every component and the energy are conserved over the plant, and the specifications hold. The conventional design is also reached from scratch, which is the slow test.
 - **`test_golden.py`.** The reference configuration (conventional, `chebeir2019`) is checked against the values above, with the paper's tolerances, together with the ordinal result of Section 4.1.
 - **`test_hysys_reference.py`.** The `hysys` basis is checked against the HYSYS case, with the misses asserted as misses.
+- **`test_hysys_inspection.py`.** `hysys_reference.config()` against the inspection and the reports, at the criteria of Comparison with the tuned HYSYS case, with the exceptions asserted as exceptions.
 - **`test_structures.py`.** Every structure is a fixed point of every scheme, and `feed ethane` keeps the feed composition normalized. The damping ratios are asserted in the slow tests.
 - **Shared modules.** The equation of state and the staged column are tested in the library (`tests/units/test_peng_robinson.py`, `tests/units/test_staged_column.py`): the first against `thermo`, the second against the constant-volatility column.
 

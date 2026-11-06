@@ -11,6 +11,13 @@ and ethane only.
 Correspondence of tags, HYSYS to the paper: E-101 is E-100, E-102 is E-102, E-103 is
 E-104, Separator is TK-100, Turboexpander and Booster are TE-100, Recompressor is K-101,
 Cryogenic Compressor is K-102, the column's reboiler is E-103.
+
+The `inspection` section holds a later reading of the same case through the HYSYS COM
+interface, with the integrator stopped: its recovery and ratio set-points, NGL flow, duties
+and machine powers, and ERIC-100 and RIC-100.  The `hysys` basis designs at the TK-100
+temperature of the reports, which recovers 0.8296; the HYSYS case's ERIC-100 holds 0.82.
+`config` is the configuration that compares the case with it: `recovery cascade` on the
+`hysys` basis, designed at the HYSYS recovery set-point, the TK-100 temperature a result.
 """
 
 from __future__ import annotations
@@ -20,6 +27,8 @@ from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
+
+from plantbench.core.case import Config
 
 HERE = Path(__file__).resolve().parent
 C = 273.15
@@ -32,6 +41,33 @@ def load() -> dict:
 
 def stream(name: str) -> dict:
     return load()["streams"][name]
+
+
+def inspection() -> dict:
+    return load()["inspection"]
+
+
+TUNINGS = ("plantbench",)
+
+
+def config(tuning: str = "plantbench") -> Config:
+    """The configuration of the comparison with the HYSYS case: the crr scheme on the
+    `hysys` basis under `recovery cascade`, designed at ERIC-100's set-point."""
+    from .definition import CASE
+
+    if tuning not in TUNINGS:
+        raise ValueError(f"tuning must be one of {TUNINGS}, not {tuning!r}")
+    return CASE.config(
+        structure="recovery cascade", options={"scheme": "crr", "basis": "hysys"},
+        params={"separator_spec": "recovery",
+                "recovery_design": inspection()["ERIC-100"]["setpoint"]})
+
+
+def hysys_ratio(measurements: dict) -> float:
+    """RIC-100's measurement, F18 / F17: the branch, the bypass vapor and the branch
+    liquid, over the expander flow.  The input `split` is the expander over the bypass
+    vapor alone, so its reciprocal is not this ratio."""
+    return measurements["branch flow"] / measurements["expander flow"]
 
 
 def initial_state(plant) -> np.ndarray:
