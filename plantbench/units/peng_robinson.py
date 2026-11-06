@@ -752,8 +752,8 @@ def _rachford_rice(z, K, beta0, tol: float = 1e-14, max_iter: int = 100):
     if len(rows) == 0:
         return beta
     zr, Kr = z[rows], Km1[rows]
-    lo = 1.0 / (1.0 - Kmax[rows])
-    hi = 1.0 / (1.0 - Kmin[rows])
+    pole_lo = lo = 1.0 / (1.0 - Kmax[rows])
+    pole_hi = hi = 1.0 / (1.0 - Kmin[rows])
     b = xp.clip(beta[rows], lo + 1e-9 * (hi - lo), hi - 1e-9 * (hi - lo))
     finished = xp.zeros(len(rows), dtype=bool)
     for _ in range(max_iter):
@@ -767,6 +767,11 @@ def _rachford_rice(z, K, beta0, tol: float = 1e-14, max_iter: int = 100):
         # lands on the bracket's end, which a test with <= would take for leaving it,
         # sending the row to bisect the bracket down to the tolerance.
         new = xp.where((new < lo) | (new > hi), 0.5 * (lo + hi), new)
+        # The poles end the bracket until the sum changes sign, and the sum is infinite
+        # there.  A step or a midpoint that reaches one, which happens where the root lies
+        # within round-off of it (a trace of a component with an extreme K), leaves the
+        # row where it is; the row then stops.
+        new = xp.where((new <= pole_lo) | (new >= pole_hi), b, new)
         done = xp.abs(new - b) <= tol * (1.0 + xp.abs(b))
         b = xp.where(finished, b, new)
         finished = finished | done

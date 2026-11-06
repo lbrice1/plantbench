@@ -185,6 +185,7 @@ DEVICE double pb_rachford_rice(int nc, const double *z, const double *K, double 
         return 2.0;
     double lo = 1.0 / (1.0 - Kmax);
     double hi = 1.0 / (1.0 - Kmin);
+    double pole_lo = lo, pole_hi = hi;
     double b_lo = lo + 1e-9 * (hi - lo), b_hi = hi - 1e-9 * (hi - lo);
     double b = beta0 < b_lo ? b_lo : (beta0 > b_hi ? b_hi : beta0);
     for (int it = 0; it < max_iter; it++) {
@@ -202,6 +203,8 @@ DEVICE double pb_rachford_rice(int nc, const double *z, const double *K, double 
         double next = b - f / df;
         if (next < lo || next > hi)
             next = 0.5 * (lo + hi);
+        if (next <= pole_lo || next >= pole_hi)  /* a pole: the row stays and stops */
+            next = b;
         int done = fabs(next - b) <= tol * (1.0 + fabs(b));
         b = next;
         if (done)
